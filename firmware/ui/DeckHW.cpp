@@ -1,0 +1,305 @@
+#include "DeckHW.h"
+#include "Theme.h"
+#include <esp_heap_caps.h>
+#include <driver/i2s.h>
+#include <SD.h>
+#include <Update.h>
+
+volatile int16_t DeckHW::_tb_x = 0;
+volatile int16_t DeckHW::_tb_y = 0;
+
+void IRAM_ATTR DeckHW::isrUp()    { _tb_y--; }
+void IRAM_ATTR DeckHW::isrDown()  { _tb_y++; }
+void IRAM_ATTR DeckHW::isrLeft()  { _tb_x--; }
+void IRAM_ATTR DeckHW::isrRight() { _tb_x++; }
+
+// PSRAM-backed canvas: GFXcanvas16 allocates with malloc which lands in PSRAM
+// for large blocks on this board (SPIRAM_USE_MALLOC), so we can use it directly.
+
+bool DeckHW::begin(bool flip_display) {
+  _flip = flip_display;
+
+  // backlight PWM (LEDC channel 1; T-Deck backlight is on GPIO42)
+  ledcSetup(1, 20000, 8);
+  ledcAttachPin(TDECK_TFT_BL, 1);
+  ledcWrite(1, 255);
+
+  // display on its own HSPI handle, same wiring pattern as stock MeshCore T-Deck build
+  _spi = new SPIClass(HSPI);
+  _spi->begin(TDECK_SPI_SCK, -1, TDECK_SPI_MOSI, TDECK_TFT_CS);
+  _tft = new Adafruit_ST7789(_spi, TDECK_TFT_CS, TDECK_TFT_DC, -1);
+  _tft->init(240, 320);           // panel is portrait native
+  _tft->setRotation(_flip ? 1 : 3);
+  _tft->setSPISpeed(40000000);
+  _tft->fillScreen(0x0000);
+
+  _canvas = new GFXcanvas16(SCREEN_W, SCREEN_H);
+
+  // keyboard + touch share the main Wire bus (SDA 18 / SCL 8), already begun by target
+  Wire.begin(TDECK_I2C_SDA, TDECK_I2C_SCL);
+  Wire.setClock(400000);
+
+  // probe GT911 at both addresses
+  const uint8_t addrs[2] = { 0x5D, 0x14 };
+  for (int i = 0; i < 2; i++) {
+    Wire.beginTransmission(addrs[i]);
+    if (Wire.endTransmission() == 0) { _touch_addr = addrs[i]; break; }
+  }
+
+  // trackball
+  pinMode(TDECK_TB_UP, INPUT_PULLUP);
+  pinMode(TDECK_TB_DOWN, INPUT_PULLUP);
+  pinMode(TDECK_TB_LEFT, INPUT_PULLUP);
+  pinMode(TDECK_TB_RIGHT, INPUT_PULLUP);
+  pinMode(TDECK_TB_PRESS, INPUT_PULLUP);
+  attachInterrupt(TDECK_TB_UP, isrUp, FALLING);
+  attachInterrupt(TDECK_TB_DOWN, isrDown, FALLING);
+  attachInterrupt(TDECK_TB_LEFT, isrLeft, FALLING);
+  attachInterrupt(TDECK_TB_RIGHT, isrRight, FALLING);
+
+  _last_activity = millis();
+  return _touch_addr != 0;
+}
+
+void DeckHW::setRotationFlip(bool flip) {
+  _flip = flip;
+  if (_tft) _tft->setRotation(flip ? 1 : 3);
+}
+
+void DeckHW::push() {
+  if (_tft && _canvas && _disp_on) {
+    _tft->drawRGBBitmap(0, 0, _canvas->getBuffer(), SCREEN_W, SCREEN_H);
+  }
+}
+
+void DeckHW::setBacklight(uint8_t level) {
+  _bl_level = level;
+  if (_disp_on) ledcWrite(1, level);
+}
+
+void DeckHW::displayOff() {
+  if (_disp_on) {
+    ledcWrite(1, 0);
+    _tft->enableSleep(true);
+    _disp_on = false;
+  }
+}
+
+void DeckHW::displayOn() {
+  if (!_disp_on) {
+    _tft->enableSleep(false);
+    delay(5);
+    _disp_on = true;
+    push();
+    ledcWrite(1, _bl_level);
+  }
+}
+
+// ---------------- keyboard ----------------
+
+uint8_t DeckHW::readKey() {
+  Wire.requestFrom((uint8_t)TDECK_KB_ADDR, (uint8_t)1);
+  if (Wire.available()) {
+    uint8_t k = Wire.read();
+    if (k != 0) { _last_activity = millis(); return k; }
+  }
+  return 0;
+}
+
+// ---------------- trackball + button ----------------
+
+NavEvent DeckHW::readNav() {
+  // button (GPIO0, active low). short press = SELECT, long press = BACK
+  bool down = digitalRead(TDECK_TB_PRESS) == LOW;
+  if (down && !_btn_was_down) {
+    _btn_was_down = true;
+    _btn_long_fired = false;
+    _btn_down_at = millis();
+  } else if (down && _btn_was_down && !_btn_long_fired && millis() - _btn_down_at > 550) {
+    _btn_long_fired = true;
+    _last_activity = millis();
+    return NAV_BACK;
+  } else if (!down && _btn_was_down) {
+    _btn_was_down = false;
+    _last_activity = millis();
+    if (!_btn_long_fired && millis() - _btn_down_at < 550) return NAV_SELECT;
+    return NAV_NONE;
+  }
+
+  // trackball: accumulate pulses, emit one nav step per threshold
+  const int TH = 2;
+  noInterrupts();
+  int16_t x = _tb_x, y = _tb_y;
+  interrupts();
+  if (y <= -TH) { noInterrupts(); _tb_y += TH; interrupts(); _last_activity = millis(); return _flip ? NAV_DOWN : NAV_UP; }
+  if (y >=  TH) { noInterrupts(); _tb_y -= TH; interrupts(); _last_activity = millis(); return _flip ? NAV_UP : NAV_DOWN; }
+  if (x <= -TH) { noInterrupts(); _tb_x += TH; interrupts(); _last_activity = millis(); return _flip ? NAV_RIGHT : NAV_LEFT; }
+  if (x >=  TH) { noInterrupts(); _tb_x -= TH; interrupts(); _last_activity = millis(); return _flip ? NAV_LEFT : NAV_RIGHT; }
+  return NAV_NONE;
+}
+
+// ---------------- GT911 touch ----------------
+
+bool DeckHW::gt911Read(uint8_t* buf) {
+  // status register 0x814E, point data 0x814F..
+  Wire.beginTransmission(_touch_addr);
+  Wire.write(0x81); Wire.write(0x4E);
+  if (Wire.endTransmission(false) != 0) return false;
+  Wire.requestFrom(_touch_addr, (uint8_t)9);
+  if (Wire.available() < 9) return false;
+  for (int i = 0; i < 9; i++) buf[i] = Wire.read();
+  if (buf[0] & 0x80) {
+    // clear status
+    Wire.beginTransmission(_touch_addr);
+    Wire.write(0x81); Wire.write(0x4E); Wire.write(0x00);
+    Wire.endTransmission();
+    return true;
+  }
+  return false;
+}
+
+bool DeckHW::readTouch(TouchEvent& ev) {
+  ev.kind = TouchEvent::NONE;
+  if (_touch_addr == 0) return false;
+
+  uint8_t buf[9];
+  bool fresh = gt911Read(buf);
+  uint8_t n = fresh ? (buf[0] & 0x0F) : 0;
+
+  if (n > 0) {
+    // GT911 reports panel-native coords (portrait 240x320)
+    int16_t rx = buf[2] | (buf[3] << 8);
+    int16_t ry = buf[4] | (buf[5] << 8);
+    // map to landscape canvas
+    int16_t sx, sy;
+    if (!_flip) { sx = ry; sy = 240 - rx; }
+    else        { sx = 320 - ry; sy = rx; }
+    if (sx < 0) sx = 0; if (sx >= SCREEN_W) sx = SCREEN_W - 1;
+    if (sy < 0) sy = 0; if (sy >= SCREEN_H) sy = SCREEN_H - 1;
+
+    _last_activity = millis();
+    if (!_touching) {
+      _touching = true;
+      _t_start_x = _tx = sx; _t_start_y = _ty = sy;
+      _t_start_ms = millis();
+      _t_moved = false;
+      return false;
+    }
+    int16_t dx = sx - _tx, dy = sy - _ty;
+    if (abs(sx - _t_start_x) > 8 || abs(sy - _t_start_y) > 8) _t_moved = true;
+    _tx = sx; _ty = sy;
+    if (_t_moved && (dx || dy)) {
+      ev.kind = TouchEvent::DRAG;
+      ev.x = sx; ev.y = sy; ev.dx = dx; ev.dy = dy;
+      return true;
+    }
+    return false;
+  }
+
+  if (_touching && fresh) {   // finger lifted
+    _touching = false;
+    if (!_t_moved && millis() - _t_start_ms < 600) {
+      ev.kind = TouchEvent::TAP;
+      ev.x = _tx; ev.y = _ty; ev.dx = 0; ev.dy = 0;
+    } else {
+      ev.kind = TouchEvent::RELEASE;
+      ev.x = _tx; ev.y = _ty;
+      ev.dx = _tx - _t_start_x; ev.dy = _ty - _t_start_y;
+    }
+    return true;
+  }
+  return false;
+}
+
+// ---------------- sound (I2S speaker) ----------------
+
+void DeckHW::i2sTone(uint16_t freq, uint16_t ms) {
+  if (!_snd_on || _snd_vol == 0 || freq == 0) return;
+
+  const int RATE = 16000;
+  i2s_config_t cfg = {};
+  cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+  cfg.sample_rate = RATE;
+  cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+  cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+  cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  cfg.intr_alloc_flags = 0;
+  cfg.dma_buf_count = 4;
+  cfg.dma_buf_len = 256;
+  if (i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL) != ESP_OK) return;
+
+  i2s_pin_config_t pins = {};
+  pins.mck_io_num = I2S_PIN_NO_CHANGE;
+  pins.bck_io_num = TDECK_I2S_BCK;
+  pins.ws_io_num = TDECK_I2S_WS;
+  pins.data_out_num = TDECK_I2S_DOUT;
+  pins.data_in_num = I2S_PIN_NO_CHANGE;
+  i2s_set_pin(I2S_NUM_0, &pins);
+
+  int16_t amp = 1500 * _snd_vol;      // vol 0..10
+  int total = RATE * ms / 1000;
+  int half = RATE / freq / 2;
+  if (half < 1) half = 1;
+  int16_t sample[2];
+  int level = amp;
+  int cnt = 0;
+  size_t written;
+  for (int i = 0; i < total; i++) {
+    if (++cnt >= half) { cnt = 0; level = -level; }
+    sample[0] = sample[1] = level;
+    i2s_write(I2S_NUM_0, sample, sizeof(sample), &written, portMAX_DELAY);
+  }
+  i2s_zero_dma_buffer(I2S_NUM_0);
+  i2s_driver_uninstall(I2S_NUM_0);
+}
+
+void DeckHW::beep(uint16_t f, uint16_t ms) { i2sTone(f, ms); }
+void DeckHW::chimeMessage() { i2sTone(1319, 60); i2sTone(1760, 90); }
+void DeckHW::chimeBoot()    { i2sTone(880, 70); i2sTone(1109, 70); i2sTone(1319, 110); }
+void DeckHW::chimeError()   { i2sTone(220, 120); }
+
+// ---------------- SD card ----------------
+
+bool DeckHW::sdBegin() {
+  // Re-init the shared bus with MISO so SD works
+  _spi->end();
+  _spi->begin(TDECK_SPI_SCK, TDECK_SPI_MISO, TDECK_SPI_MOSI, TDECK_SD_CS);
+  return SD.begin(TDECK_SD_CS, *_spi, 10000000);
+}
+
+void DeckHW::sdEnd() {
+  SD.end();
+  _spi->end();
+  _spi->begin(TDECK_SPI_SCK, -1, TDECK_SPI_MOSI, TDECK_TFT_CS);
+}
+
+// ---------------- SD firmware update ----------------
+
+const char* DeckHW::updateFromSD() {
+  if (!sdBegin()) {
+    sdEnd();
+    return "No SD card found";
+  }
+  File f = SD.open("/firmware.bin");
+  if (!f) {
+    sdEnd();
+    return "firmware.bin not on card";
+  }
+  size_t sz = f.size();
+  if (!Update.begin(sz)) { f.close(); SD.end(); return "Not enough space"; }
+
+  uint8_t buf[4096];
+  size_t done = 0;
+  while (done < sz) {
+    int n = f.read(buf, sizeof(buf));
+    if (n <= 0) break;
+    Update.write(buf, n);
+    done += n;
+  }
+  f.close();
+  SD.end();
+  if (done == sz && Update.end(true)) {
+    ESP.restart();   // never returns
+  }
+  return "Update failed - try again";
+}
