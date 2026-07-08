@@ -43,19 +43,25 @@ void setup() {
 
   fast_rng.begin(radio_driver.getRngSeed());
 
+  ui_task.bootStatus("loading storage...");
   SPIFFS.begin(true);
   store.begin();
+
+  ui_task.bootStatus("starting mesh...");
   the_mesh.begin(true);
 
+  ui_task.bootStatus("starting bluetooth...");
   serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
   the_mesh.startInterface(serial_interface);
 
+  ui_task.bootStatus("starting sensors...");
   sensors.begin();
 
 #if ENV_INCLUDE_GPS == 1
   the_mesh.applyGpsPrefs();
 #endif
 
+  ui_task.bootStatus("starting ui...");
   ui_task.begin(&the_mesh, &sensors, the_mesh.getNodePrefs());
 
   board.onBootComplete();
