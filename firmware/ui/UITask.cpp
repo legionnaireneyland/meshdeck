@@ -757,7 +757,18 @@ void UITask::dispatchInput() {
   if (k) {
     used = s->key(k);
     if (!used) {
-      if (k == 0x08) { back(); used = true; }    // backspace = back when unused
+      // keyboard fallback navigation: only fires when the current screen did
+      // NOT consume the key, so text screens (chat/terminal) are unaffected.
+      // i/k = up/down, j/l = left/right, space/enter = select.
+      switch (k) {
+        case 'i': case 'I': used = s->nav(NAV_UP); break;
+        case 'k': case 'K': used = s->nav(NAV_DOWN); break;
+        case 'j': case 'J': used = s->nav(NAV_LEFT); break;
+        case 'l': case 'L': used = s->nav(NAV_RIGHT); break;
+        case ' ': used = s->nav(NAV_SELECT); break;
+        case 0x08: back(); used = true; break;      // backspace = back when unused
+        case 0x1B: back(); used = true; break;       // esc = back
+      }
     }
     _dirty = true;
   }

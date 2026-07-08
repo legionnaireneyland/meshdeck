@@ -41,12 +41,21 @@ bool DeckHW::begin(bool flip_display) {
   Wire.begin(TDECK_I2C_SDA, TDECK_I2C_SCL);
   Wire.setClock(400000);
 
-  // probe GT911 at both addresses
+  // GT911 touch INT pin: leave as input so the controller free-runs
+  pinMode(TDECK_TOUCH_INT, INPUT);
+
+  // probe GT911 at both addresses; retry, as it can be slow to wake after power-on
   const uint8_t addrs[2] = { 0x5D, 0x14 };
-  for (int i = 0; i < 2; i++) {
-    Wire.beginTransmission(addrs[i]);
-    if (Wire.endTransmission() == 0) { _touch_addr = addrs[i]; break; }
+  for (int attempt = 0; attempt < 3 && _touch_addr == 0; attempt++) {
+    for (int i = 0; i < 2; i++) {
+      Wire.beginTransmission(addrs[i]);
+      if (Wire.endTransmission() == 0) { _touch_addr = addrs[i]; break; }
+    }
+    if (_touch_addr == 0) delay(20);
   }
+  // if probing still failed, default to the standard address and read anyway -
+  // a missing ACK at boot must not permanently disable the touchscreen
+  if (_touch_addr == 0) _touch_addr = 0x5D;
 
   // trackball
   pinMode(TDECK_TB_UP, INPUT_PULLUP);
@@ -54,10 +63,12 @@ bool DeckHW::begin(bool flip_display) {
   pinMode(TDECK_TB_LEFT, INPUT_PULLUP);
   pinMode(TDECK_TB_RIGHT, INPUT_PULLUP);
   pinMode(TDECK_TB_PRESS, INPUT_PULLUP);
-  attachInterrupt(TDECK_TB_UP, isrUp, CHANGE);
-  attachInterrupt(TDECK_TB_DOWN, isrDown, CHANGE);
-  attachInterrupt(TDECK_TB_LEFT, isrLeft, CHANGE);
-  attachInterrupt(TDECK_TB_RIGHT, isrRight, CHANGE);
+  // FALLING edge: one clean pulse per roll-detent (CHANGE double-counts and
+  // cancels out on a mechanical trackball)
+  attachInterrupt(TDECK_TB_UP, isrUp, FALLING);
+  attachInterrupt(TDECK_TB_DOWN, isrDown, FALLING);
+  attachInterrupt(TDECK_TB_LEFT, isrLeft, FALLING);
+  attachInterrupt(TDECK_TB_RIGHT, isrRight, FALLING);
 
   _last_activity = millis();
   return _touch_addr != 0;
