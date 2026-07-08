@@ -61,6 +61,8 @@ public:
   uint8_t readKey();                        // 0 = none, else ASCII (0x0D enter, 0x08 bksp)
   NavEvent readNav();                       // trackball + button (SELECT / BACK on long press)
   bool readTouch(TouchEvent& ev);
+  void setTouchMap(uint8_t m) { _touch_map = m; }   // 0..3, see readTouch()
+  bool hasTouch() const { return _touch_addr != 0; }
   uint32_t lastActivityMillis() const { return _last_activity; }
   void kickActivity() { _last_activity = millis(); }
 
@@ -88,6 +90,7 @@ private:
   Adafruit_ST7789* _tft = nullptr;
   GFXcanvas16* _canvas = nullptr;
   uint8_t _touch_addr = 0;
+  uint8_t _touch_map = 0;
   bool _flip = false;
   bool _disp_on = true;
   uint8_t _bl_level = 255;

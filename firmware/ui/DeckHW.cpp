@@ -25,8 +25,10 @@ bool DeckHW::begin(bool flip_display) {
   ledcWrite(1, 255);
 
   // display on its own HSPI handle, same wiring pattern as stock MeshCore T-Deck build
+  // (MISO is attached once here so the SD card can share the bus without re-routing
+  //  pins later - re-routing would steal SCK/MOSI from the radio's SPI host)
   _spi = new SPIClass(HSPI);
-  _spi->begin(TDECK_SPI_SCK, -1, TDECK_SPI_MOSI, TDECK_TFT_CS);
+  _spi->begin(TDECK_SPI_SCK, TDECK_SPI_MISO, TDECK_SPI_MOSI, TDECK_TFT_CS);
   _tft = new Adafruit_ST7789(_spi, TDECK_TFT_CS, TDECK_TFT_DC, -1);
   _tft->init(240, 320);           // panel is portrait native
   _tft->setRotation(_flip ? 1 : 3);
@@ -52,10 +54,10 @@ bool DeckHW::begin(bool flip_display) {
   pinMode(TDECK_TB_LEFT, INPUT_PULLUP);
   pinMode(TDECK_TB_RIGHT, INPUT_PULLUP);
   pinMode(TDECK_TB_PRESS, INPUT_PULLUP);
-  attachInterrupt(TDECK_TB_UP, isrUp, FALLING);
-  attachInterrupt(TDECK_TB_DOWN, isrDown, FALLING);
-  attachInterrupt(TDECK_TB_LEFT, isrLeft, FALLING);
-  attachInterrupt(TDECK_TB_RIGHT, isrRight, FALLING);
+  attachInterrupt(TDECK_TB_UP, isrUp, CHANGE);
+  attachInterrupt(TDECK_TB_DOWN, isrDown, CHANGE);
+  attachInterrupt(TDECK_TB_LEFT, isrLeft, CHANGE);
+  attachInterrupt(TDECK_TB_RIGHT, isrRight, CHANGE);
 
   _last_activity = millis();
   return _touch_addr != 0;
@@ -115,19 +117,19 @@ NavEvent DeckHW::readNav() {
     _btn_was_down = true;
     _btn_long_fired = false;
     _btn_down_at = millis();
-  } else if (down && _btn_was_down && !_btn_long_fired && millis() - _btn_down_at > 550) {
+  } else if (down && _btn_was_down && !_btn_long_fired && millis() - _btn_down_at > 700) {
     _btn_long_fired = true;
     _last_activity = millis();
     return NAV_BACK;
   } else if (!down && _btn_was_down) {
     _btn_was_down = false;
     _last_activity = millis();
-    if (!_btn_long_fired && millis() - _btn_down_at < 550) return NAV_SELECT;
+    if (!_btn_long_fired) return NAV_SELECT;
     return NAV_NONE;
   }
 
-  // trackball: accumulate pulses, emit one nav step per threshold
-  const int TH = 2;
+  // trackball: one nav step per pulse edge (both edges counted)
+  const int TH = 1;
   noInterrupts();
   int16_t x = _tb_x, y = _tb_y;
   interrupts();
@@ -167,13 +169,20 @@ bool DeckHW::readTouch(TouchEvent& ev) {
   uint8_t n = fresh ? (buf[0] & 0x0F) : 0;
 
   if (n > 0) {
-    // GT911 reports panel-native coords (portrait 240x320)
     int16_t rx = buf[2] | (buf[3] << 8);
     int16_t ry = buf[4] | (buf[5] << 8);
-    // map to landscape canvas
+    // Touch controller configs vary between T-Deck batches; four mappings,
+    // selectable in Settings -> Touch mapping:
+    //   0 = landscape direct, 1 = landscape 180, 2 = portrait swap A, 3 = portrait swap B
     int16_t sx, sy;
-    if (!_flip) { sx = ry; sy = 240 - rx; }
-    else        { sx = 320 - ry; sy = rx; }
+    switch (_touch_map) {
+      default:
+      case 0: sx = rx;       sy = ry;       break;
+      case 1: sx = 320 - rx; sy = 240 - ry; break;
+      case 2: sx = ry;       sy = 240 - rx; break;
+      case 3: sx = 320 - ry; sy = rx;       break;
+    }
+    if (_flip) { sx = 320 - sx; sy = 240 - sy; }
     if (sx < 0) sx = 0; if (sx >= SCREEN_W) sx = SCREEN_W - 1;
     if (sy < 0) sy = 0; if (sy >= SCREEN_H) sy = SCREEN_H - 1;
 
@@ -247,7 +256,7 @@ void DeckHW::i2sTone(uint16_t freq, uint16_t ms) {
   for (int i = 0; i < total; i++) {
     if (++cnt >= half) { cnt = 0; level = -level; }
     sample[0] = sample[1] = level;
-    i2s_write(I2S_NUM_0, sample, sizeof(sample), &written, portMAX_DELAY);
+    if (i2s_write(I2S_NUM_0, sample, sizeof(sample), &written, pdMS_TO_TICKS(50)) != ESP_OK) break;
   }
   i2s_zero_dma_buffer(I2S_NUM_0);
   i2s_driver_uninstall(I2S_NUM_0);
@@ -259,18 +268,15 @@ void DeckHW::chimeBoot()    { i2sTone(880, 70); i2sTone(1109, 70); i2sTone(1319,
 void DeckHW::chimeError()   { i2sTone(220, 120); }
 
 // ---------------- SD card ----------------
+// The bus already has MISO attached (see begin()), so no pin re-routing is
+// needed - that would break the radio, which shares these pins on another host.
 
 bool DeckHW::sdBegin() {
-  // Re-init the shared bus with MISO so SD works
-  _spi->end();
-  _spi->begin(TDECK_SPI_SCK, TDECK_SPI_MISO, TDECK_SPI_MOSI, TDECK_SD_CS);
   return SD.begin(TDECK_SD_CS, *_spi, 10000000);
 }
 
 void DeckHW::sdEnd() {
   SD.end();
-  _spi->end();
-  _spi->begin(TDECK_SPI_SCK, -1, TDECK_SPI_MOSI, TDECK_TFT_CS);
 }
 
 // ---------------- SD firmware update ----------------

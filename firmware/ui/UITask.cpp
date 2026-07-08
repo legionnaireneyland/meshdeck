@@ -184,6 +184,17 @@ void UITask::earlyInit() {
   memset(_noise, -128, sizeof(_noise));
 }
 
+void UITask::bootStatus(const char* msg) {
+  GFXcanvas16& c = cv();
+  c.fillRect(0, 144, SCREEN_W, 16, C_BG);
+  c.setTextSize(1);
+  c.setTextColor(C_FG_DIM);
+  c.setCursor((SCREEN_W - (int)strlen(msg) * 6) / 2, 150);
+  c.print(msg);
+  hw.push();
+  Serial.println(msg);
+}
+
 void UITask::fatalError(const char* msg) {
   GFXcanvas16& c = cv();
   c.fillScreen(C_BG);
@@ -228,6 +239,13 @@ void UITask::begin(MyMesh* m, SensorManager* s, NodePrefs* p) {
           prefs->node_name, StrHelper::ftoa(prefs->freq), (int)prefs->sf, StrHelper::ftoa(prefs->bw));
   termLog(C_TERM_SYS, "type 'help' for commands");
 
+  // show the home screen straight away, before any optional extras
+  _booted = true;
+  _cur = SCR_HOME;
+  _screens[_cur]->enter();
+  drawAll();
+  _dirty = true;
+
   // load high-detail map packs from SD, if a card is present
   int packs = sdmaps.load(hw);
   if (packs > 0) {
@@ -239,10 +257,6 @@ void UITask::begin(MyMesh* m, SensorManager* s, NodePrefs* p) {
     termLog(C_TERM_SYS, "sd card: no map packs in /meshdeck-maps");
   }
 
-  _booted = true;
-  _cur = SCR_HOME;
-  _screens[_cur]->enter();
-  _dirty = true;
   hw.chimeBoot();
 }
 
@@ -267,6 +281,7 @@ void UITask::applySettings() {
   hw.setBacklight(set.brightness);
   hw.setSound(set.sounds != 0, set.volume);
   hw.setRotationFlip(set.flip != 0);
+  hw.setTouchMap(set.touch_map);
   if (set.man_lat != 0 || set.man_lon != 0) {
     if (sensors && sensors->node_lat == 0 && sensors->node_lon == 0) {
       sensors->node_lat = set.man_lat / 1000000.0;
