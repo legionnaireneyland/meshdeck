@@ -44,7 +44,8 @@ struct DeckSettings {
   uint8_t always_on;       // keep clock screen lit
   int32_t man_lat, man_lon;   // manual position * 1e6 (0,0 = unset)
   uint8_t touch_map;          // 0..3, touch coordinate mapping
-  uint8_t reserved[7];
+  uint8_t tb_speed;           // trackball speed 1(slow)..5(fast); 0 = unset -> default
+  uint8_t reserved[6];
 };
 
 // ---- last heard ----

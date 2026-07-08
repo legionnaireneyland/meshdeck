@@ -282,6 +282,9 @@ void UITask::applySettings() {
   hw.setSound(set.sounds != 0, set.volume);
   hw.setRotationFlip(set.flip != 0);
   hw.setTouchMap(set.touch_map);
+  if (set.tb_speed < 1 || set.tb_speed > 5) set.tb_speed = 3;   // default: medium
+  // speed 1..5  ->  pulses-per-step 10,8,6,4,2  (higher speed = fewer pulses)
+  hw.setTrackballStep(12 - set.tb_speed * 2);
   if (set.man_lat != 0 || set.man_lon != 0) {
     if (sensors && sensors->node_lat == 0 && sensors->node_lon == 0) {
       sensors->node_lat = set.man_lat / 1000000.0;

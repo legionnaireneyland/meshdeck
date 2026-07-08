@@ -139,16 +139,25 @@ NavEvent DeckHW::readNav() {
     return NAV_NONE;
   }
 
-  // trackball: one nav step per pulse edge (both edges counted)
-  const int TH = 1;
+  // Trackball: a physical roll fires a burst of pulses. Emit one nav step only
+  // once _tb_step pulses accumulate on an axis, AND no more than one step per
+  // 55 ms, so a fast roll doesn't fly through the whole list.
+  const int TH = _tb_step;
+  uint32_t now = millis();
+  if (now - _last_nav_ms < 55) return NAV_NONE;
+
   noInterrupts();
   int16_t x = _tb_x, y = _tb_y;
   interrupts();
-  if (y <= -TH) { noInterrupts(); _tb_y += TH; interrupts(); _last_activity = millis(); return _flip ? NAV_DOWN : NAV_UP; }
-  if (y >=  TH) { noInterrupts(); _tb_y -= TH; interrupts(); _last_activity = millis(); return _flip ? NAV_UP : NAV_DOWN; }
-  if (x <= -TH) { noInterrupts(); _tb_x += TH; interrupts(); _last_activity = millis(); return _flip ? NAV_RIGHT : NAV_LEFT; }
-  if (x >=  TH) { noInterrupts(); _tb_x -= TH; interrupts(); _last_activity = millis(); return _flip ? NAV_LEFT : NAV_RIGHT; }
-  return NAV_NONE;
+
+  NavEvent ev = NAV_NONE;
+  if (y <= -TH)      { noInterrupts(); _tb_y = 0; _tb_x = 0; interrupts(); ev = _flip ? NAV_DOWN : NAV_UP; }
+  else if (y >=  TH) { noInterrupts(); _tb_y = 0; _tb_x = 0; interrupts(); ev = _flip ? NAV_UP : NAV_DOWN; }
+  else if (x <= -TH) { noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts(); ev = _flip ? NAV_RIGHT : NAV_LEFT; }
+  else if (x >=  TH) { noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts(); ev = _flip ? NAV_LEFT : NAV_RIGHT; }
+
+  if (ev != NAV_NONE) { _last_nav_ms = now; _last_activity = now; }
+  return ev;
 }
 
 // ---------------- GT911 touch ----------------

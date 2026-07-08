@@ -63,6 +63,7 @@ public:
   bool readTouch(TouchEvent& ev);
   void setTouchMap(uint8_t m) { _touch_map = m; }   // 0..3, see readTouch()
   bool hasTouch() const { return _touch_addr != 0; }
+  void setTrackballStep(uint8_t pulses) { _tb_step = pulses < 1 ? 1 : pulses; }  // pulses per nav step
   uint32_t lastActivityMillis() const { return _last_activity; }
   void kickActivity() { _last_activity = millis(); }
 
@@ -91,6 +92,8 @@ private:
   GFXcanvas16* _canvas = nullptr;
   uint8_t _touch_addr = 0;
   uint8_t _touch_map = 0;
+  uint8_t _tb_step = 6;            // trackball pulses required per nav step
+  uint32_t _last_nav_ms = 0;       // rate-limit timestamp
   bool _flip = false;
   bool _disp_on = true;
   uint8_t _bl_level = 255;

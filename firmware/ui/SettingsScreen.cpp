@@ -4,7 +4,7 @@
 
 enum SetItem : int {
   SI_NAME = 0, SI_FREQ, SI_SF, SI_BW, SI_CR, SI_POWER,
-  SI_BRIGHT, SI_TIMEOUT, SI_ALWAYS, SI_SOUND, SI_VOL, SI_FLIP, SI_TOUCHMAP,
+  SI_BRIGHT, SI_TIMEOUT, SI_ALWAYS, SI_SOUND, SI_VOL, SI_FLIP, SI_TOUCHMAP, SI_TBSPEED,
   SI_LOCPOL, SI_MANLAT, SI_MANLON, SI_AUTOADD,
   SI_ADVERT, SI_ADVERTF, SI_SDMAPS, SI_SDUPDATE, SI_ABOUT,
   SI_COUNT
@@ -12,7 +12,7 @@ enum SetItem : int {
 
 static const char* LABELS[SI_COUNT] = {
   "Node name", "Frequency (MHz)", "Spreading factor", "Bandwidth (kHz)", "Coding rate", "TX power (dBm)",
-  "Brightness", "Screen timeout (s)", "Always-on clock", "Sounds", "Volume", "Flip display", "Touch mapping",
+  "Brightness", "Screen timeout (s)", "Always-on clock", "Sounds", "Volume", "Flip display", "Touch mapping", "Trackball speed",
   "Share location in advert", "Manual latitude", "Manual longitude", "Auto-add contacts",
   "Send advert (0-hop)", "Send advert (flood)", "Reload SD map packs", "Update firmware from SD", "About"
 };
@@ -62,6 +62,7 @@ void SettingsScreen::draw() {
       case SI_VOL:     snprintf(v, sizeof(v), "%d/10", ui.set.volume); break;
       case SI_FLIP:    strcpy(v, ui.set.flip ? "yes" : "no"); break;
       case SI_TOUCHMAP: snprintf(v, sizeof(v), "%c", 'A' + ui.set.touch_map); break;
+      case SI_TBSPEED:  snprintf(v, sizeof(v), "%d/5", ui.set.tb_speed); break;
       case SI_LOCPOL:  strcpy(v, p->advert_loc_policy ? "yes" : "no"); break;
       case SI_MANLAT:  snprintf(v, sizeof(v), "%.5f", ui.set.man_lat / 1000000.0); break;
       case SI_MANLON:  snprintf(v, sizeof(v), "%.5f", ui.set.man_lon / 1000000.0); break;
@@ -139,6 +140,10 @@ void SettingsScreen::adjust(int dir) {
       ui.set.touch_map = (ui.set.touch_map + (dir > 0 ? 1 : 3)) & 3;
       ui.hw.setTouchMap(ui.set.touch_map);
       ui.toast("Tap the screen to test");
+      break;
+    case SI_TBSPEED:
+      ui.set.tb_speed = constrain(ui.set.tb_speed + dir, 1, 5);
+      ui.hw.setTrackballStep(12 - ui.set.tb_speed * 2);
       break;
     case SI_LOCPOL: p->advert_loc_policy = p->advert_loc_policy ? 0 : 1; break;
     case SI_AUTOADD: p->manual_add_contacts ^= 1; break;
