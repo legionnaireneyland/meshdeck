@@ -791,19 +791,8 @@ void UITask::dispatchInput() {
     _dirty = true;
   }
   if (nv != NAV_NONE) {
-    // Double-click the trackball = back (works even if the I2C keyboard is flaky).
-    if (nv == NAV_SELECT) {
-      uint32_t nowm = millis();
-      if (nowm - _last_select_ms < 450) {
-        _last_select_ms = 0;
-        back();
-        _dirty = true;
-        return;
-      }
-      _last_select_ms = nowm;
-    }
     used = s->nav(nv);
-    if (!used && nv == NAV_BACK) back();
+    if (!used && nv == NAV_BACK) back();   // trackball press-and-hold = back
     _dirty = true;
   }
   if (has_touch) {

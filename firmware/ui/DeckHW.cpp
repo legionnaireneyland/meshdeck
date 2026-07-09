@@ -139,18 +139,25 @@ NavEvent DeckHW::readNav() {
   // and fires BACK on release instead.
   bool raw = digitalRead(TDECK_TB_PRESS) == LOW;
   if (raw != _btn_raw) { _btn_raw = raw; _btn_edge_ms = now; }   // debounce timer
-  bool stable = (now - _btn_edge_ms) > 25;
+  bool stable = (now - _btn_edge_ms) > 30;
 
   if (stable && raw && !_btn_was_down) {
-    // confirmed press-down: act immediately (click = SELECT)
+    // confirmed press-down: don't act yet - decide on release / hold
     _btn_was_down = true;
+    _btn_down_at = now;
+    _btn_long_fired = false;
     _last_activity = now;
-    // clear any stray motion so a click never scrolls
-    noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts();
-    return NAV_SELECT;
+    noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts();   // a click never scrolls
+  }
+  if (_btn_was_down && raw && !_btn_long_fired && now - _btn_down_at > 400) {
+    _btn_long_fired = true;                     // press-and-hold -> BACK
+    _last_activity = now;
+    return NAV_BACK;
   }
   if (stable && !raw && _btn_was_down) {
-    _btn_was_down = false;                     // release (no action; back is on keyboard/swipe)
+    _btn_was_down = false;                      // release
+    _last_activity = now;
+    if (!_btn_long_fired) return NAV_SELECT;    // quick click -> SELECT
   }
 
   // Trackball: a physical roll fires a burst of pulses. Emit one nav step once

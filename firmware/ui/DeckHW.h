@@ -109,6 +109,8 @@ private:
   static void IRAM_ATTR isrRight();
   bool _btn_was_down = false;
   bool _btn_raw = false;           // last raw reading (for debounce)
+  bool _btn_long_fired = false;    // long-press BACK already emitted this press
+  uint32_t _btn_down_at = 0;       // when the current press began
   uint32_t _btn_edge_ms = 0;       // when raw last changed
 
 public:
