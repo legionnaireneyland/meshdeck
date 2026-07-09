@@ -37,25 +37,35 @@ bool DeckHW::begin(bool flip_display) {
 
   _canvas = new GFXcanvas16(SCREEN_W, SCREEN_H);
 
+  // Release a possibly-stuck I2C bus: if a previous transaction left a slave
+  // holding SDA low, bit-bang 9 clock pulses on SCL to let it finish.
+  pinMode(TDECK_I2C_SCL, OUTPUT_OPEN_DRAIN);
+  pinMode(TDECK_I2C_SDA, INPUT_PULLUP);
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(TDECK_I2C_SCL, HIGH); delayMicroseconds(6);
+    digitalWrite(TDECK_I2C_SCL, LOW);  delayMicroseconds(6);
+  }
+
   // keyboard + touch share the main Wire bus (SDA 18 / SCL 8), already begun by target
   Wire.begin(TDECK_I2C_SDA, TDECK_I2C_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(100000);      // 100 kHz is the reliable rate for these peripherals
+  Wire.setTimeOut(20);        // CRITICAL: 20 ms, not the 1000 ms default - a flaky
+                              // or absent device must never stall the UI loop
 
   // GT911 touch INT pin: leave as input so the controller free-runs
   pinMode(TDECK_TOUCH_INT, INPUT);
 
-  // probe GT911 at both addresses; retry, as it can be slow to wake after power-on
+  // probe GT911 at both addresses; retry, as it can be slow to wake after power-on.
+  // If it is NOT found, leave _touch_addr = 0 so we never poll a missing device
+  // (polling an absent I2C device wedges the whole bus and kills the keyboard too).
   const uint8_t addrs[2] = { 0x5D, 0x14 };
-  for (int attempt = 0; attempt < 3 && _touch_addr == 0; attempt++) {
+  for (int attempt = 0; attempt < 4 && _touch_addr == 0; attempt++) {
     for (int i = 0; i < 2; i++) {
       Wire.beginTransmission(addrs[i]);
       if (Wire.endTransmission() == 0) { _touch_addr = addrs[i]; break; }
     }
-    if (_touch_addr == 0) delay(20);
+    if (_touch_addr == 0) delay(30);
   }
-  // if probing still failed, default to the standard address and read anyway -
-  // a missing ACK at boot must not permanently disable the touchscreen
-  if (_touch_addr == 0) _touch_addr = 0x5D;
 
   // trackball
   pinMode(TDECK_TB_UP, INPUT_PULLUP);

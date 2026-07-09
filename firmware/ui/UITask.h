@@ -189,6 +189,7 @@ private:
   uint32_t _last_tick = 0;
   uint32_t _last_noise_sample = 0;
   uint32_t _last_settings_refresh = 0;
+  uint32_t _last_select_ms = 0;     // for double-click-to-back detection
 
   // toast/notify popup
   char _toast[64];

@@ -235,8 +235,14 @@ void UITask::begin(MyMesh* m, SensorManager* s, NodePrefs* p) {
   _screens[SCR_QR]        = new QRScreen(*this);
 
   termLog(C_TERM_SYS, "MeshDeck v%s on MeshCore %s", MESHDECK_VERSION, FIRMWARE_VERSION);
-  termLog(C_TERM_SYS, "node: %s  freq: %s MHz sf%d bw%s",
-          prefs->node_name, StrHelper::ftoa(prefs->freq), (int)prefs->sf, StrHelper::ftoa(prefs->bw));
+  // NOTE: format the floats separately - StrHelper::ftoa returns a shared static
+  // buffer, so calling it twice in one printf would print the same value twice.
+  {
+    char fq[16], bw[16];
+    snprintf(fq, sizeof(fq), "%.3f", prefs->freq);
+    snprintf(bw, sizeof(bw), "%.1f", prefs->bw);
+    termLog(C_TERM_SYS, "node: %s  freq: %s MHz sf%d bw%s", prefs->node_name, fq, (int)prefs->sf, bw);
+  }
   termLog(C_TERM_SYS, "type 'help' for commands");
 
   // show the home screen straight away, before any optional extras
@@ -775,13 +781,27 @@ void UITask::dispatchInput() {
         case 'j': case 'J': used = s->nav(NAV_LEFT); break;
         case 'l': case 'L': used = s->nav(NAV_RIGHT); break;
         case ' ': used = s->nav(NAV_SELECT); break;
-        case 0x08: back(); used = true; break;      // backspace = back when unused
-        case 0x1B: back(); used = true; break;       // esc = back
+        case 0x08:            // backspace
+        case 0x7F:            // delete (some T-Deck keebs send this for backspace)
+        case 0x1B:            // esc
+        case '`':             // handy always-back key
+          back(); used = true; break;
       }
     }
     _dirty = true;
   }
   if (nv != NAV_NONE) {
+    // Double-click the trackball = back (works even if the I2C keyboard is flaky).
+    if (nv == NAV_SELECT) {
+      uint32_t nowm = millis();
+      if (nowm - _last_select_ms < 450) {
+        _last_select_ms = 0;
+        back();
+        _dirty = true;
+        return;
+      }
+      _last_select_ms = nowm;
+    }
     used = s->nav(nv);
     if (!used && nv == NAV_BACK) back();
     _dirty = true;
