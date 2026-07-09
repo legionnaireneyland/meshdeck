@@ -122,29 +122,32 @@ uint8_t DeckHW::readKey() {
 // ---------------- trackball + button ----------------
 
 NavEvent DeckHW::readNav() {
-  // button (GPIO0, active low). short press = SELECT, long press = BACK
-  bool down = digitalRead(TDECK_TB_PRESS) == LOW;
-  if (down && !_btn_was_down) {
+  uint32_t now = millis();
+
+  // Button (GPIO0, active low). Debounced. Fire SELECT the moment a press is
+  // confirmed (feels instant); a hold past 550 ms cancels the pending select
+  // and fires BACK on release instead.
+  bool raw = digitalRead(TDECK_TB_PRESS) == LOW;
+  if (raw != _btn_raw) { _btn_raw = raw; _btn_edge_ms = now; }   // debounce timer
+  bool stable = (now - _btn_edge_ms) > 25;
+
+  if (stable && raw && !_btn_was_down) {
+    // confirmed press-down: act immediately (click = SELECT)
     _btn_was_down = true;
-    _btn_long_fired = false;
-    _btn_down_at = millis();
-  } else if (down && _btn_was_down && !_btn_long_fired && millis() - _btn_down_at > 700) {
-    _btn_long_fired = true;
-    _last_activity = millis();
-    return NAV_BACK;
-  } else if (!down && _btn_was_down) {
-    _btn_was_down = false;
-    _last_activity = millis();
-    if (!_btn_long_fired) return NAV_SELECT;
-    return NAV_NONE;
+    _last_activity = now;
+    // clear any stray motion so a click never scrolls
+    noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts();
+    return NAV_SELECT;
+  }
+  if (stable && !raw && _btn_was_down) {
+    _btn_was_down = false;                     // release (no action; back is on keyboard/swipe)
   }
 
-  // Trackball: a physical roll fires a burst of pulses. Emit one nav step only
-  // once _tb_step pulses accumulate on an axis, AND no more than one step per
-  // 55 ms, so a fast roll doesn't fly through the whole list.
+  // Trackball: a physical roll fires a burst of pulses. Emit one nav step once
+  // _tb_step pulses accumulate on an axis, rate-limited so a fast roll doesn't
+  // fly through the whole list but stays responsive.
   const int TH = _tb_step;
-  uint32_t now = millis();
-  if (now - _last_nav_ms < 55) return NAV_NONE;
+  if (now - _last_nav_ms < 25) return NAV_NONE;
 
   noInterrupts();
   int16_t x = _tb_x, y = _tb_y;

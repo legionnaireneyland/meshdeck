@@ -188,6 +188,7 @@ private:
   bool _booted = false;
   uint32_t _last_tick = 0;
   uint32_t _last_noise_sample = 0;
+  uint32_t _last_settings_refresh = 0;
 
   // toast/notify popup
   char _toast[64];

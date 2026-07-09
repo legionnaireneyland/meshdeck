@@ -91,6 +91,15 @@ void SettingsScreen::draw() {
   c.setTextColor(C_FG_FAINT);
   c.setCursor(6, SCREEN_H - 10);
   if (_editing) c.print("type value, enter = apply");
+  else if (_sel == SI_TBSPEED) {
+    // live input test: roll the ball / click it and watch these numbers move
+    bool btn; int px, py;
+    ui.hw.inputDebug(btn, px, py);
+    c.setTextColor(btn ? C_GREEN : C_FG_FAINT);
+    char dbg[48];
+    snprintf(dbg, sizeof(dbg), "input test  click:%s  ball x:%d y:%d", btn ? "DOWN" : "up", px, py);
+    c.print(dbg);
+  }
   else if (isTextItem(_sel)) c.print("enter = edit value");
   else c.print("left/right = change   enter = action");
 }
@@ -143,7 +152,7 @@ void SettingsScreen::adjust(int dir) {
       break;
     case SI_TBSPEED:
       ui.set.tb_speed = constrain(ui.set.tb_speed + dir, 1, 5);
-      ui.hw.setTrackballStep(12 - ui.set.tb_speed * 2);
+      ui.hw.setTrackballStep(6 - ui.set.tb_speed);
       break;
     case SI_LOCPOL: p->advert_loc_policy = p->advert_loc_policy ? 0 : 1; break;
     case SI_AUTOADD: p->manual_add_contacts ^= 1; break;

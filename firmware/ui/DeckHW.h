@@ -92,7 +92,7 @@ private:
   GFXcanvas16* _canvas = nullptr;
   uint8_t _touch_addr = 0;
   uint8_t _touch_map = 0;
-  uint8_t _tb_step = 6;            // trackball pulses required per nav step
+  uint8_t _tb_step = 3;            // trackball pulses required per nav step
   uint32_t _last_nav_ms = 0;       // rate-limit timestamp
   bool _flip = false;
   bool _disp_on = true;
@@ -107,9 +107,17 @@ private:
   static void IRAM_ATTR isrDown();
   static void IRAM_ATTR isrLeft();
   static void IRAM_ATTR isrRight();
-  uint32_t _btn_down_at = 0;
   bool _btn_was_down = false;
-  bool _btn_long_fired = false;
+  bool _btn_raw = false;           // last raw reading (for debounce)
+  uint32_t _btn_edge_ms = 0;       // when raw last changed
+
+public:
+  // live input state for the on-screen input test (Settings)
+  void inputDebug(bool& btn, int& px, int& py) {
+    btn = digitalRead(TDECK_TB_PRESS) == LOW;
+    noInterrupts(); px = _tb_x; py = _tb_y; interrupts();
+  }
+private:
 
   // touch state
   bool _touching = false;

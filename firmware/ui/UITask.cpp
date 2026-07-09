@@ -283,8 +283,8 @@ void UITask::applySettings() {
   hw.setRotationFlip(set.flip != 0);
   hw.setTouchMap(set.touch_map);
   if (set.tb_speed < 1 || set.tb_speed > 5) set.tb_speed = 3;   // default: medium
-  // speed 1..5  ->  pulses-per-step 10,8,6,4,2  (higher speed = fewer pulses)
-  hw.setTrackballStep(12 - set.tb_speed * 2);
+  // speed 1..5  ->  pulses-per-step 5,4,3,2,1  (higher speed = fewer pulses)
+  hw.setTrackballStep(6 - set.tb_speed);
   if (set.man_lat != 0 || set.man_lon != 0) {
     if (sensors && sensors->node_lat == 0 && sensors->node_lon == 0) {
       sensors->node_lat = set.man_lat / 1000000.0;
@@ -718,6 +718,12 @@ void UITask::loop() {
     _screens[_cur]->tick1s();
     if (_cur == SCR_HOME && hw.isDisplayOn()) _dirty = true;
     checkDim();
+  }
+
+  // keep the Settings screen live so the input-test readout updates smoothly
+  if (_cur == SCR_SETTINGS && hw.isDisplayOn() && millis() - _last_settings_refresh > 100) {
+    _last_settings_refresh = millis();
+    _dirty = true;
   }
 
   if (_toast_until && millis() > _toast_until) {
