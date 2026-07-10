@@ -39,13 +39,18 @@ bool DeckHW::begin(bool flip_display) {
 
   _canvas = new GFXcanvas16(SCREEN_W, SCREEN_H);
 
-  // Release a possibly-stuck I2C bus: if a previous transaction left a slave
-  // holding SDA low, bit-bang 9 clock pulses on SCL to let it finish.
-  pinMode(TDECK_I2C_SCL, OUTPUT_OPEN_DRAIN);
+  // Release a stuck I2C bus, but ONLY if it is actually stuck (SDA held low).
+  // Pulsing SCL on a healthy bus can upset the keyboard controller, so we check
+  // first and leave a working bus completely alone.
   pinMode(TDECK_I2C_SDA, INPUT_PULLUP);
-  for (int i = 0; i < 9; i++) {
-    digitalWrite(TDECK_I2C_SCL, HIGH); delayMicroseconds(6);
-    digitalWrite(TDECK_I2C_SCL, LOW);  delayMicroseconds(6);
+  delayMicroseconds(5);
+  if (digitalRead(TDECK_I2C_SDA) == LOW) {          // bus is wedged - recover it
+    pinMode(TDECK_I2C_SCL, OUTPUT_OPEN_DRAIN);
+    for (int i = 0; i < 9 && digitalRead(TDECK_I2C_SDA) == LOW; i++) {
+      digitalWrite(TDECK_I2C_SCL, HIGH); delayMicroseconds(6);
+      digitalWrite(TDECK_I2C_SCL, LOW);  delayMicroseconds(6);
+    }
+    digitalWrite(TDECK_I2C_SCL, HIGH);              // final stop-ish condition
   }
 
   // keyboard + touch share the main Wire bus (SDA 18 / SCL 8), already begun by target
@@ -133,6 +138,12 @@ void DeckHW::displayOn() {
 // ---------------- keyboard ----------------
 
 uint8_t DeckHW::readKey() {
+  // throttle to ~60 Hz - the keyboard's C3 returns each key once and can drop
+  // presses if polled thousands of times a second
+  uint32_t now = millis();
+  if (now - _last_kb_read < 16) return 0;
+  _last_kb_read = now;
+
   if (Wire.requestFrom((uint8_t)TDECK_KB_ADDR, (uint8_t)1) != 1) return 0;
   if (Wire.available()) {
     uint8_t k = Wire.read();

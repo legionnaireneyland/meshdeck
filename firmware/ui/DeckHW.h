@@ -95,6 +95,7 @@ private:
   uint8_t _touch_map = 0;
   bool _kb_present = false;        // keyboard 0x55 ACKed at boot
   uint8_t _last_key = 0;           // last key byte read (for input test)
+  uint32_t _last_kb_read = 0;      // keyboard poll throttle
   uint8_t _tb_step = 3;            // trackball pulses required per nav step
   uint32_t _last_nav_ms = 0;       // rate-limit timestamp
   bool _flip = false;
