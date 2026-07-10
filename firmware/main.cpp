@@ -41,6 +41,11 @@ void setup() {
     halt();
   }
 
+  // radio_init() has now done the single Wire.begin(). Set up the I2C timeout
+  // and probe the keyboard/touch exactly once here, so the sensor scan that
+  // follows is fast and the keyboard/touch controllers are read cleanly.
+  ui_task.hw.initI2CDevices();
+
   fast_rng.begin(radio_driver.getRngSeed());
 
   ui_task.bootStatus("loading storage...");
