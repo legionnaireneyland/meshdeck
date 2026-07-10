@@ -139,7 +139,7 @@ NavEvent DeckHW::readNav() {
   // and fires BACK on release instead.
   bool raw = digitalRead(TDECK_TB_PRESS) == LOW;
   if (raw != _btn_raw) { _btn_raw = raw; _btn_edge_ms = now; }   // debounce timer
-  bool stable = (now - _btn_edge_ms) > 30;
+  bool stable = (now - _btn_edge_ms) > 20;
 
   if (stable && raw && !_btn_was_down) {
     // confirmed press-down: don't act yet - decide on release / hold
@@ -149,7 +149,9 @@ NavEvent DeckHW::readNav() {
     _last_activity = now;
     noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts();   // a click never scrolls
   }
-  if (_btn_was_down && raw && !_btn_long_fired && now - _btn_down_at > 400) {
+  // Only a deliberate long hold (>900 ms) is BACK, so an ordinary firm click -
+  // which can easily last a few hundred ms - always reads as SELECT.
+  if (_btn_was_down && raw && !_btn_long_fired && now - _btn_down_at > 900) {
     _btn_long_fired = true;                     // press-and-hold -> BACK
     _last_activity = now;
     return NAV_BACK;
@@ -157,7 +159,7 @@ NavEvent DeckHW::readNav() {
   if (stable && !raw && _btn_was_down) {
     _btn_was_down = false;                      // release
     _last_activity = now;
-    if (!_btn_long_fired) return NAV_SELECT;    // quick click -> SELECT
+    if (!_btn_long_fired) return NAV_SELECT;    // press/click -> SELECT
   }
 
   // Trackball: a physical roll fires a burst of pulses. Emit one nav step once
