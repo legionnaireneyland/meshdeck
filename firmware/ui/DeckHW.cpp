@@ -150,30 +150,36 @@ NavEvent DeckHW::readNav() {
   // Button (GPIO0, active low). Debounced. Fire SELECT the moment a press is
   // confirmed (feels instant); a hold past 550 ms cancels the pending select
   // and fires BACK on release instead.
-  // Trackball click model:
-  //   * SELECT fires the instant a press is confirmed (feels immediate, and is
-  //     robust even if the UI loop only samples the button coarsely - one
-  //     sample catching the press is enough).
-  //   * A DOUBLE-click (two presses within 500 ms) is BACK.
-  //   * Holding does nothing - it can never sleep or blank the screen.
+  // Trackball click model (debounced, robust to bounce AND to a coarse UI loop):
+  //   * a quick tap = SELECT (fired when released)
+  //   * press-and-hold past 400 ms = BACK (fired while held, with feedback)
+  //   * a button held at boot is ignored until first released (anti-brick)
+  // The raw line is debounced into `_btn_debounced` which only flips after
+  // 25 ms of a steady reading, so contact bounce can never fake a release.
   bool raw = digitalRead(TDECK_TB_PRESS) == LOW;
-  if (raw != _btn_raw) { _btn_raw = raw; _btn_edge_ms = now; }   // debounce timer
-  bool stable = (now - _btn_edge_ms) > 15;
+  if (raw != _btn_raw) { _btn_raw = raw; _btn_edge_ms = now; }
+  if (now - _btn_edge_ms > 25) _btn_debounced = raw;
 
-  // Arm only after a clean release, so a button held at boot (or a pin that
-  // idles low) can never auto-fire a phantom event.
-  if (stable && !raw) { _btn_armed = true; _btn_was_down = false; }
+  // Arm on the RAW released line (not the debounced state): at boot the debounced
+  // state defaults low, which would falsely arm a button that is physically held.
+  if (!raw) _btn_armed = true;
 
-  if (_btn_armed && stable && raw && !_btn_was_down) {
-    _btn_was_down = true;                        // new confirmed press edge
+  if (_btn_armed && _btn_debounced && !_btn_was_down) {
+    _btn_was_down = true;                         // debounced press begins
+    _btn_down_at = now;
+    _btn_long_fired = false;
     _last_activity = now;
     noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts();   // a click never scrolls
-    if (_btn_last_click_ms != 0 && now - _btn_last_click_ms < 500) {
-      _btn_last_click_ms = 0;
-      return NAV_BACK;                           // double-click -> back
-    }
-    _btn_last_click_ms = now;
-    return NAV_SELECT;                           // single click -> select
+  }
+  if (_btn_was_down && _btn_debounced && !_btn_long_fired && now - _btn_down_at > 400) {
+    _btn_long_fired = true;                       // hold -> BACK (immediate feedback)
+    _last_activity = now;
+    return NAV_BACK;
+  }
+  if (_btn_was_down && !_btn_debounced) {
+    _btn_was_down = false;                        // released
+    _last_activity = now;
+    if (!_btn_long_fired) return NAV_SELECT;      // short tap -> SELECT
   }
 
   // Trackball: a physical roll fires a burst of pulses. Emit one nav step once

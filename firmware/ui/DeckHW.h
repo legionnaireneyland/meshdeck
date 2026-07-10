@@ -110,11 +110,13 @@ private:
   static void IRAM_ATTR isrDown();
   static void IRAM_ATTR isrLeft();
   static void IRAM_ATTR isrRight();
-  bool _btn_was_down = false;      // a press edge is currently held
-  bool _btn_raw = false;           // last raw reading (for debounce)
+  bool _btn_was_down = false;      // a debounced press is currently held
+  bool _btn_raw = false;           // last raw reading
+  bool _btn_debounced = false;     // debounced button state (25ms stable)
   bool _btn_armed = false;         // becomes true after first clean release
+  bool _btn_long_fired = false;    // BACK already emitted for this hold
   uint32_t _btn_edge_ms = 0;       // when raw last changed
-  uint32_t _btn_last_click_ms = 0; // for double-click (=back) detection
+  uint32_t _btn_down_at = 0;       // when the debounced press began
 
 public:
   // live input state for the on-screen input test (Settings)
