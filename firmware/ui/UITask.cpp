@@ -156,7 +156,7 @@ void UITask::earlyInit() {
   // load settings early (SPIFFS not up yet -> defaults; re-loaded in begin())
   set.magic = DECKSET_MAGIC;
   set.brightness = 255;
-  set.timeout_s = 60;
+  set.timeout_s = 0;          // never auto-sleep by default (opt-in in Settings)
   set.sounds = 1;
   set.volume = 6;
   set.flip = 0;
@@ -289,6 +289,14 @@ void UITask::saveSettings() {
 
 void UITask::applySettings() {
   if (set.brightness < 30) set.brightness = 200;   // never allow a black screen from a bad value
+  // Sanitise the sleep timeout: only a known-good value is allowed, so a stray/
+  // corrupt setting can never make the screen blank itself right after boot.
+  {
+    bool ok = false;
+    const uint16_t valid[] = {0, 15, 30, 60, 120, 300};
+    for (uint16_t v : valid) if (set.timeout_s == v) ok = true;
+    if (!ok) set.timeout_s = 0;
+  }
   hw.setBacklight(set.brightness);
   hw.setSound(set.sounds != 0, set.volume);
   hw.setRotationFlip(set.flip != 0);
