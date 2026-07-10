@@ -7,11 +7,13 @@
 
 volatile int16_t DeckHW::_tb_x = 0;
 volatile int16_t DeckHW::_tb_y = 0;
+volatile bool DeckHW::_click_edge = false;
 
 void IRAM_ATTR DeckHW::isrUp()    { _tb_y--; }
 void IRAM_ATTR DeckHW::isrDown()  { _tb_y++; }
 void IRAM_ATTR DeckHW::isrLeft()  { _tb_x--; }
 void IRAM_ATTR DeckHW::isrRight() { _tb_x++; }
+void IRAM_ATTR DeckHW::isrClick() { _click_edge = true; }
 
 // PSRAM-backed canvas: GFXcanvas16 allocates with malloc which lands in PSRAM
 // for large blocks on this board (SPIRAM_USE_MALLOC), so we can use it directly.
@@ -87,6 +89,8 @@ bool DeckHW::begin(bool flip_display) {
   attachInterrupt(TDECK_TB_DOWN, isrDown, FALLING);
   attachInterrupt(TDECK_TB_LEFT, isrLeft, FALLING);
   attachInterrupt(TDECK_TB_RIGHT, isrRight, FALLING);
+  _click_edge = false;
+  attachInterrupt(TDECK_TB_PRESS, isrClick, FALLING);   // catch every click in hardware
 
   _last_activity = millis();
   return _touch_addr != 0;
@@ -150,36 +154,41 @@ NavEvent DeckHW::readNav() {
   // Button (GPIO0, active low). Debounced. Fire SELECT the moment a press is
   // confirmed (feels instant); a hold past 550 ms cancels the pending select
   // and fires BACK on release instead.
-  // Trackball click model (debounced, robust to bounce AND to a coarse UI loop):
-  //   * a quick tap = SELECT (fired when released)
-  //   * press-and-hold past 400 ms = BACK (fired while held, with feedback)
-  //   * a button held at boot is ignored until first released (anti-brick)
-  // The raw line is debounced into `_btn_debounced` which only flips after
-  // 25 ms of a steady reading, so contact bounce can never fake a release.
-  bool raw = digitalRead(TDECK_TB_PRESS) == LOW;
-  if (raw != _btn_raw) { _btn_raw = raw; _btn_edge_ms = now; }
-  if (now - _btn_edge_ms > 25) _btn_debounced = raw;
+  // Trackball click model - read the SAME way the (reliable) directions are:
+  // the press edge is caught by a hardware interrupt (isrClick sets _click_edge),
+  // so a quick tap can never be missed even if this loop samples slowly. We then
+  // poll the pin only to tell a tap from a hold:
+  //   * quick tap  -> SELECT (on release)
+  //   * hold >450ms -> BACK
+  // A button already held at boot produces no falling edge, so it can't fire.
+  bool low = digitalRead(TDECK_TB_PRESS) == LOW;
 
-  // Arm on the RAW released line (not the debounced state): at boot the debounced
-  // state defaults low, which would falsely arm a button that is physically held.
-  if (!raw) _btn_armed = true;
-
-  if (_btn_armed && _btn_debounced && !_btn_was_down) {
-    _btn_was_down = true;                         // debounced press begins
+  if (_click_edge && !_btn_was_down) {            // fresh press detected in hardware
+    _click_edge = false;
+    _btn_was_down = true;
     _btn_down_at = now;
     _btn_long_fired = false;
+    _btn_up_since = 0;
     _last_activity = now;
     noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts();   // a click never scrolls
   }
-  if (_btn_was_down && _btn_debounced && !_btn_long_fired && now - _btn_down_at > 400) {
-    _btn_long_fired = true;                       // hold -> BACK (immediate feedback)
-    _last_activity = now;
-    return NAV_BACK;
-  }
-  if (_btn_was_down && !_btn_debounced) {
-    _btn_was_down = false;                        // released
-    _last_activity = now;
-    if (!_btn_long_fired) return NAV_SELECT;      // short tap -> SELECT
+  if (_btn_was_down) {
+    if (low) {
+      _btn_up_since = 0;
+      if (!_btn_long_fired && now - _btn_down_at > 450) {
+        _btn_long_fired = true;
+        _last_activity = now;
+        return NAV_BACK;                          // held -> back
+      }
+    } else {                                       // pin is high (released) - debounce it
+      if (_btn_up_since == 0) _btn_up_since = now;
+      if (now - _btn_up_since > 25) {
+        _btn_was_down = false;
+        _click_edge = false;                       // drop any bounce edge from the release
+        _last_activity = now;
+        if (!_btn_long_fired) return NAV_SELECT;   // quick tap -> select
+      }
+    }
   }
 
   // Trackball: a physical roll fires a burst of pulses. Emit one nav step once

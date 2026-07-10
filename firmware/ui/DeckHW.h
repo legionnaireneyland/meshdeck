@@ -106,17 +106,16 @@ private:
 
   // trackball state
   volatile static int16_t _tb_x, _tb_y;
+  volatile static bool _click_edge;   // set by isrClick on every press edge
   static void IRAM_ATTR isrUp();
   static void IRAM_ATTR isrDown();
   static void IRAM_ATTR isrLeft();
   static void IRAM_ATTR isrRight();
-  bool _btn_was_down = false;      // a debounced press is currently held
-  bool _btn_raw = false;           // last raw reading
-  bool _btn_debounced = false;     // debounced button state (25ms stable)
-  bool _btn_armed = false;         // becomes true after first clean release
+  static void IRAM_ATTR isrClick();
+  bool _btn_was_down = false;      // currently tracking a press
   bool _btn_long_fired = false;    // BACK already emitted for this hold
-  uint32_t _btn_edge_ms = 0;       // when raw last changed
-  uint32_t _btn_down_at = 0;       // when the debounced press began
+  uint32_t _btn_down_at = 0;       // when the press began
+  uint32_t _btn_up_since = 0;      // when the pin first read high (release debounce)
 
 public:
   // live input state for the on-screen input test (Settings)
