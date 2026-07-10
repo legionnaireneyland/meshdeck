@@ -92,12 +92,14 @@ void SettingsScreen::draw() {
   c.setCursor(6, SCREEN_H - 10);
   if (_editing) c.print("type value, enter = apply");
   else if (_sel == SI_TBSPEED) {
-    // live input test: roll the ball / click it and watch these numbers move
-    bool btn; int px, py;
-    ui.hw.inputDebug(btn, px, py);
+    // live input test: roll the ball, click it, press keys - watch this update
+    bool btn, touch; int px, py; uint8_t key;
+    ui.hw.inputDebug(btn, px, py, key, touch);
     c.setTextColor(btn ? C_GREEN : C_FG_FAINT);
-    char dbg[48];
-    snprintf(dbg, sizeof(dbg), "input test  click:%s  ball x:%d y:%d", btn ? "DOWN" : "up", px, py);
+    char dbg[64];
+    snprintf(dbg, sizeof(dbg), "click:%s ball:%d,%d key:%d(%c) kb:%s touch:%s",
+             btn ? "DOWN" : "up", px, py, key, (key >= 32 && key < 127) ? key : '.',
+             ui.hw.hasKeyboard() ? "Y" : "N", touch ? "Y" : "N");
     c.print(dbg);
   }
   else if (isTextItem(_sel)) c.print("enter = edit value");

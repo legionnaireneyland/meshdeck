@@ -59,10 +59,11 @@ public:
 
   // -- input --
   uint8_t readKey();                        // 0 = none, else ASCII (0x0D enter, 0x08 bksp)
-  NavEvent readNav();                       // trackball + button (SELECT / BACK on long press)
+  NavEvent readNav();                       // trackball + button (click = select, dbl = back)
   bool readTouch(TouchEvent& ev);
   void setTouchMap(uint8_t m) { _touch_map = m; }   // 0..3, see readTouch()
   bool hasTouch() const { return _touch_addr != 0; }
+  bool hasKeyboard() const { return _kb_present; }
   void setTrackballStep(uint8_t pulses) { _tb_step = pulses < 1 ? 1 : pulses; }  // pulses per nav step
   uint32_t lastActivityMillis() const { return _last_activity; }
   void kickActivity() { _last_activity = millis(); }
@@ -92,6 +93,8 @@ private:
   GFXcanvas16* _canvas = nullptr;
   uint8_t _touch_addr = 0;
   uint8_t _touch_map = 0;
+  bool _kb_present = false;        // keyboard 0x55 ACKed at boot
+  uint8_t _last_key = 0;           // last key byte read (for input test)
   uint8_t _tb_step = 3;            // trackball pulses required per nav step
   uint32_t _last_nav_ms = 0;       // rate-limit timestamp
   bool _flip = false;
@@ -107,17 +110,19 @@ private:
   static void IRAM_ATTR isrDown();
   static void IRAM_ATTR isrLeft();
   static void IRAM_ATTR isrRight();
-  bool _btn_was_down = false;
+  bool _btn_was_down = false;      // a press edge is currently held
   bool _btn_raw = false;           // last raw reading (for debounce)
-  bool _btn_long_fired = false;    // long-press BACK already emitted this press
-  uint32_t _btn_down_at = 0;       // when the current press began
+  bool _btn_armed = false;         // becomes true after first clean release
   uint32_t _btn_edge_ms = 0;       // when raw last changed
+  uint32_t _btn_last_click_ms = 0; // for double-click (=back) detection
 
 public:
   // live input state for the on-screen input test (Settings)
-  void inputDebug(bool& btn, int& px, int& py) {
+  void inputDebug(bool& btn, int& px, int& py, uint8_t& lastKey, bool& touch) {
     btn = digitalRead(TDECK_TB_PRESS) == LOW;
     noInterrupts(); px = _tb_x; py = _tb_y; interrupts();
+    lastKey = _last_key;
+    touch = _touch_addr != 0;
   }
 private:
 

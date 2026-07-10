@@ -55,6 +55,14 @@ bool DeckHW::begin(bool flip_display) {
   // GT911 touch INT pin: leave as input so the controller free-runs
   pinMode(TDECK_TOUCH_INT, INPUT);
 
+  // probe the keyboard (ESP32-C3 at 0x55). It can take a moment to boot its
+  // own firmware after peripheral power comes up, so retry for up to ~1.5 s.
+  for (int attempt = 0; attempt < 15 && !_kb_present; attempt++) {
+    Wire.beginTransmission((uint8_t)TDECK_KB_ADDR);
+    if (Wire.endTransmission() == 0) { _kb_present = true; break; }
+    delay(100);
+  }
+
   // probe GT911 at both addresses; retry, as it can be slow to wake after power-on.
   // If it is NOT found, leave _touch_addr = 0 so we never poll a missing device
   // (polling an absent I2C device wedges the whole bus and kills the keyboard too).
@@ -121,10 +129,15 @@ void DeckHW::displayOn() {
 // ---------------- keyboard ----------------
 
 uint8_t DeckHW::readKey() {
-  Wire.requestFrom((uint8_t)TDECK_KB_ADDR, (uint8_t)1);
+  if (Wire.requestFrom((uint8_t)TDECK_KB_ADDR, (uint8_t)1) != 1) return 0;
   if (Wire.available()) {
     uint8_t k = Wire.read();
-    if (k != 0) { _last_activity = millis(); return k; }
+    if (k != 0 && k != 0xFF) {      // 0x00 / 0xFF are idle values
+      _kb_present = true;           // a real key proves the keyboard is alive
+      _last_key = k;
+      _last_activity = millis();
+      return k;
+    }
   }
   return 0;
 }
@@ -137,29 +150,30 @@ NavEvent DeckHW::readNav() {
   // Button (GPIO0, active low). Debounced. Fire SELECT the moment a press is
   // confirmed (feels instant); a hold past 550 ms cancels the pending select
   // and fires BACK on release instead.
+  // Trackball click model:
+  //   * SELECT fires the instant a press is confirmed (feels immediate, and is
+  //     robust even if the UI loop only samples the button coarsely - one
+  //     sample catching the press is enough).
+  //   * A DOUBLE-click (two presses within 500 ms) is BACK.
+  //   * Holding does nothing - it can never sleep or blank the screen.
   bool raw = digitalRead(TDECK_TB_PRESS) == LOW;
   if (raw != _btn_raw) { _btn_raw = raw; _btn_edge_ms = now; }   // debounce timer
-  bool stable = (now - _btn_edge_ms) > 20;
+  bool stable = (now - _btn_edge_ms) > 15;
 
-  if (stable && raw && !_btn_was_down) {
-    // confirmed press-down: don't act yet - decide on release / hold
-    _btn_was_down = true;
-    _btn_down_at = now;
-    _btn_long_fired = false;
+  // Arm only after a clean release, so a button held at boot (or a pin that
+  // idles low) can never auto-fire a phantom event.
+  if (stable && !raw) { _btn_armed = true; _btn_was_down = false; }
+
+  if (_btn_armed && stable && raw && !_btn_was_down) {
+    _btn_was_down = true;                        // new confirmed press edge
     _last_activity = now;
     noInterrupts(); _tb_x = 0; _tb_y = 0; interrupts();   // a click never scrolls
-  }
-  // Only a deliberate long hold (>900 ms) is BACK, so an ordinary firm click -
-  // which can easily last a few hundred ms - always reads as SELECT.
-  if (_btn_was_down && raw && !_btn_long_fired && now - _btn_down_at > 900) {
-    _btn_long_fired = true;                     // press-and-hold -> BACK
-    _last_activity = now;
-    return NAV_BACK;
-  }
-  if (stable && !raw && _btn_was_down) {
-    _btn_was_down = false;                      // release
-    _last_activity = now;
-    if (!_btn_long_fired) return NAV_SELECT;    // press/click -> SELECT
+    if (_btn_last_click_ms != 0 && now - _btn_last_click_ms < 500) {
+      _btn_last_click_ms = 0;
+      return NAV_BACK;                           // double-click -> back
+    }
+    _btn_last_click_ms = now;
+    return NAV_SELECT;                           // single click -> select
   }
 
   // Trackball: a physical roll fires a burst of pulses. Emit one nav step once

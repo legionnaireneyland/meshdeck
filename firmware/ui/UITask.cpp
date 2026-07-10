@@ -244,6 +244,10 @@ void UITask::begin(MyMesh* m, SensorManager* s, NodePrefs* p) {
     termLog(C_TERM_SYS, "node: %s  freq: %s MHz sf%d bw%s", prefs->node_name, fq, (int)prefs->sf, bw);
   }
   termLog(C_TERM_SYS, "type 'help' for commands");
+  termLog(hw.hasKeyboard() ? C_TERM_SYS : C_TERM_ERR,
+          "keyboard (0x55): %s", hw.hasKeyboard() ? "detected" : "NOT detected");
+  termLog(hw.hasTouch() ? C_TERM_SYS : C_TERM_ERR,
+          "touch (GT911): %s", hw.hasTouch() ? "detected" : "NOT detected");
 
   // show the home screen straight away, before any optional extras
   _booted = true;
@@ -284,6 +288,7 @@ void UITask::saveSettings() {
 }
 
 void UITask::applySettings() {
+  if (set.brightness < 30) set.brightness = 200;   // never allow a black screen from a bad value
   hw.setBacklight(set.brightness);
   hw.setSound(set.sounds != 0, set.volume);
   hw.setRotationFlip(set.flip != 0);

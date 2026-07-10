@@ -116,8 +116,7 @@ bool HomeScreen::nav(NavEvent e) {
     case NAV_RIGHT: if (_sel % 3 < 2) _sel++; return true;
     case NAV_SELECT: ui.go(APPS[_sel].scr); return true;
     case NAV_BACK:
-      // at home, long-press locks the screen
-      ui.hw.displayOff();
+      // already at home - do nothing (never blank the screen here)
       return true;
     default: return false;
   }
