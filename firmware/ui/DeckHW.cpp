@@ -39,48 +39,10 @@ bool DeckHW::begin(bool flip_display) {
 
   _canvas = new GFXcanvas16(SCREEN_W, SCREEN_H);
 
-  // Release a stuck I2C bus, but ONLY if it is actually stuck (SDA held low).
-  // Pulsing SCL on a healthy bus can upset the keyboard controller, so we check
-  // first and leave a working bus completely alone.
-  pinMode(TDECK_I2C_SDA, INPUT_PULLUP);
-  delayMicroseconds(5);
-  if (digitalRead(TDECK_I2C_SDA) == LOW) {          // bus is wedged - recover it
-    pinMode(TDECK_I2C_SCL, OUTPUT_OPEN_DRAIN);
-    for (int i = 0; i < 9 && digitalRead(TDECK_I2C_SDA) == LOW; i++) {
-      digitalWrite(TDECK_I2C_SCL, HIGH); delayMicroseconds(6);
-      digitalWrite(TDECK_I2C_SCL, LOW);  delayMicroseconds(6);
-    }
-    digitalWrite(TDECK_I2C_SCL, HIGH);              // final stop-ish condition
-  }
-
-  // keyboard + touch share the main Wire bus (SDA 18 / SCL 8), already begun by target
-  Wire.begin(TDECK_I2C_SDA, TDECK_I2C_SCL);
-  Wire.setClock(100000);      // 100 kHz is the reliable rate for these peripherals
-  Wire.setTimeOut(20);        // CRITICAL: 20 ms, not the 1000 ms default - a flaky
-                              // or absent device must never stall the UI loop
-
-  // GT911 touch INT pin: leave as input so the controller free-runs
-  pinMode(TDECK_TOUCH_INT, INPUT);
-
-  // probe the keyboard (ESP32-C3 at 0x55). It can take a moment to boot its
-  // own firmware after peripheral power comes up, so retry for up to ~1.5 s.
-  for (int attempt = 0; attempt < 15 && !_kb_present; attempt++) {
-    Wire.beginTransmission((uint8_t)TDECK_KB_ADDR);
-    if (Wire.endTransmission() == 0) { _kb_present = true; break; }
-    delay(100);
-  }
-
-  // probe GT911 at both addresses; retry, as it can be slow to wake after power-on.
-  // If it is NOT found, leave _touch_addr = 0 so we never poll a missing device
-  // (polling an absent I2C device wedges the whole bus and kills the keyboard too).
-  const uint8_t addrs[2] = { 0x5D, 0x14 };
-  for (int attempt = 0; attempt < 4 && _touch_addr == 0; attempt++) {
-    for (int i = 0; i < 2; i++) {
-      Wire.beginTransmission(addrs[i]);
-      if (Wire.endTransmission() == 0) { _touch_addr = addrs[i]; break; }
-    }
-    if (_touch_addr == 0) delay(30);
-  }
+  // NOTE: we deliberately do NOT touch the I2C bus here. MeshCore's radio_init()
+  // calls Wire.begin() itself; calling Wire.begin() twice (here AND there) leaves
+  // the ESP32 I2C driver wedged, which kills the keyboard and touch. All I2C
+  // setup and device probing is done once, in initI2CDevices(), AFTER radio_init.
 
   // trackball
   pinMode(TDECK_TB_UP, INPUT_PULLUP);
@@ -98,7 +60,36 @@ bool DeckHW::begin(bool flip_display) {
   attachInterrupt(TDECK_TB_PRESS, isrClick, FALLING);   // catch every click in hardware
 
   _last_activity = millis();
-  return _touch_addr != 0;
+  return true;
+}
+
+// Called ONCE from main, after MeshCore's radio_init() has done the single
+// Wire.begin(). Sets a sane clock/timeout and probes the keyboard + touch.
+void DeckHW::initI2CDevices() {
+  Wire.setClock(100000);      // 100 kHz - reliable for these peripherals
+  Wire.setTimeOut(20);        // 20 ms, not the 1000 ms default: an absent device
+                              // must never stall the UI loop for a second
+
+  pinMode(TDECK_TOUCH_INT, INPUT);   // GT911 free-runs with INT as input
+
+  // Probe the keyboard (ESP32-C3 at 0x55). It boots its own firmware after
+  // peripheral power comes up, so retry for up to ~2 s.
+  for (int attempt = 0; attempt < 20 && !_kb_present; attempt++) {
+    Wire.beginTransmission((uint8_t)TDECK_KB_ADDR);
+    if (Wire.endTransmission() == 0) { _kb_present = true; break; }
+    delay(100);
+  }
+
+  // Probe GT911 touch at both addresses. If not found, _touch_addr stays 0 and
+  // we never poll it (polling an absent device wastes bus time).
+  const uint8_t addrs[2] = { 0x5D, 0x14 };
+  for (int attempt = 0; attempt < 4 && _touch_addr == 0; attempt++) {
+    for (int i = 0; i < 2; i++) {
+      Wire.beginTransmission(addrs[i]);
+      if (Wire.endTransmission() == 0) { _touch_addr = addrs[i]; break; }
+    }
+    if (_touch_addr == 0) delay(30);
+  }
 }
 
 void DeckHW::setRotationFlip(bool flip) {

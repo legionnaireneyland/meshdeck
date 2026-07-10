@@ -45,7 +45,8 @@ struct TouchEvent {
 
 class DeckHW {
 public:
-  bool begin(bool flip_display);            // display+input up; true if touch found
+  bool begin(bool flip_display);            // display + trackball (no I2C yet)
+  void initI2CDevices();                    // call AFTER radio_init()'s Wire.begin()
   void setRotationFlip(bool flip);
 
   // -- display --
