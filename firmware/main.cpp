@@ -41,11 +41,6 @@ void setup() {
     halt();
   }
 
-  // radio_init() has now done the single Wire.begin(). Set up the I2C timeout
-  // and probe the keyboard/touch exactly once here, so the sensor scan that
-  // follows is fast and the keyboard/touch controllers are read cleanly.
-  ui_task.hw.initI2CDevices();
-
   fast_rng.begin(radio_driver.getRngSeed());
 
   ui_task.bootStatus("loading storage...");
@@ -58,6 +53,11 @@ void setup() {
   ui_task.bootStatus("starting bluetooth...");
   serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
   the_mesh.startInterface(serial_interface);
+
+  // Recover + cleanly (re)start I2C, then probe keyboard/touch, RIGHT BEFORE the
+  // sensor scan - so the bus is healthy and the scan (and every later read) is
+  // fast, and nothing can undo the timeout in between.
+  ui_task.hw.initI2CDevices();
 
   ui_task.bootStatus("starting sensors...");
   sensors.begin();
