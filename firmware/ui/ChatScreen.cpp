@@ -8,6 +8,13 @@
 #define CHAT_BOT   (SCREEN_H - INPUT_H)
 #define BUB_MAX_W  230
 
+// quick canned messages - open with a click on an empty compose bar
+static const char* CANNED[] = {
+  "On my way", "OK", "Received", "Yes", "No",
+  "At location", "Call me", "SOS - need help",
+};
+#define N_CANNED 8
+
 void ChatScreen::enter() {
   // make sure the Public channel thread exists
   ChannelDetails ch;
@@ -194,12 +201,32 @@ void ChatScreen::draw() {
   c.setCursor(8, CHAT_BOT + 7);
   if (_clen == 0) {
     c.setTextColor(C_FG_FAINT);
-    c.print(t && t->kind == TK_CHANNEL ? "Message channel  (enter=send)" : "Type a message  (enter=send)");
+    c.print(t && t->kind == TK_CHANNEL ? "Message  (click=quick msgs)" : "Type a message  (click=quick)");
   } else {
     c.print(shown);
     // cursor
     int cx2 = 8 + strlen(shown) * 6;
     c.fillRect(cx2 + 1, CHAT_BOT + 6, 2, 10, C_ACCENT);
+  }
+
+  // ---- canned quick-message picker overlay ----
+  if (_canned >= 0) {
+    int mw = 180, rh = 20, mh = N_CANNED * rh + 24;
+    int mx = (SCREEN_W - mw) / 2, my = (SCREEN_H - mh) / 2;
+    c.fillRoundRect(mx, my, mw, mh, 8, C_BG_RAISED);
+    c.drawRoundRect(mx, my, mw, mh, 8, C_ACCENT);
+    c.setTextSize(1);
+    c.setTextColor(C_ACCENT);
+    c.setCursor(mx + 10, my + 7);
+    c.print("Quick messages");
+    for (int i = 0; i < N_CANNED; i++) {
+      int ry = my + 20 + i * rh;
+      bool s = i == _canned;
+      if (s) c.fillRoundRect(mx + 4, ry - 1, mw - 8, rh - 2, 4, C_ACCENT_DK);
+      c.setTextColor(s ? C_FG : C_FG_DIM);
+      c.setCursor(mx + 12, ry + 4);
+      c.print(CANNED[i]);
+    }
   }
 }
 
@@ -218,8 +245,28 @@ void ChatScreen::sendCompose() {
   }
 }
 
+// send one of the canned quick messages, then close the picker
+void ChatScreen::sendCanned(int i) {
+  _canned = -1;
+  if (i < 0 || i >= N_CANNED) return;
+  StrHelper::strncpy(_compose, CANNED[i], sizeof(_compose));
+  _clen = strlen(_compose);
+  sendCompose();
+}
+
 bool ChatScreen::key(uint8_t k) {
-  if (k == 0x0D) { sendCompose(); return true; }
+  // canned quick-message picker open: digits pick, backspace/esc close
+  if (_canned >= 0) {
+    if (k >= '1' && k <= '0' + N_CANNED) { sendCanned(k - '1'); return true; }
+    if (k == 0x0D) { sendCanned(_canned); return true; }
+    _canned = -1;   // any other key closes the picker
+    return true;
+  }
+  if (k == 0x0D) {
+    if (_clen == 0) { _canned = 0; return true; }   // empty + enter -> quick messages
+    sendCompose();
+    return true;
+  }
   if (k == 0x08) {
     if (_clen > 0) { _clen--; _compose[_clen] = 0; return true; }
     return false;   // empty compose -> back
@@ -234,12 +281,22 @@ bool ChatScreen::key(uint8_t k) {
 }
 
 bool ChatScreen::nav(NavEvent e) {
+  // canned quick-message picker navigation
+  if (_canned >= 0) {
+    switch (e) {
+      case NAV_UP:    if (_canned > 0) _canned--; return true;
+      case NAV_DOWN:  if (_canned < N_CANNED - 1) _canned++; return true;
+      case NAV_SELECT: sendCanned(_canned); return true;
+      case NAV_BACK:  _canned = -1; return true;
+      default: return true;
+    }
+  }
   switch (e) {
     case NAV_UP:    _scroll += 24; return true;
     case NAV_DOWN:  _scroll -= 24; if (_scroll < 0) _scroll = 0; return true;
     case NAV_LEFT:  switchTab(-1); return true;
     case NAV_RIGHT: switchTab(1); return true;
-    case NAV_SELECT: sendCompose(); return true;
+    case NAV_SELECT: if (_clen == 0) { _canned = 0; return true; } sendCompose(); return true;
     default: return false;
   }
 }

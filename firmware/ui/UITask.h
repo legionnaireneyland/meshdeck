@@ -16,7 +16,8 @@ class UITask;
 
 enum ScreenId : uint8_t {
   SCR_HOME = 0, SCR_CHAT, SCR_CONTACTS, SCR_MAP, SCR_LASTHEARD, SCR_REPEATERS,
-  SCR_TRACE, SCR_NOISE, SCR_TERMINAL, SCR_SETTINGS, SCR_QR, SCR_COUNT
+  SCR_TRACE, SCR_NOISE, SCR_TERMINAL, SCR_SETTINGS, SCR_QR,
+  SCR_ONBOARD, SCR_DIAG, SCR_SOS, SCR_COUNT
 };
 
 class Screen {
@@ -45,7 +46,9 @@ struct DeckSettings {
   int32_t man_lat, man_lon;   // manual position * 1e6 (0,0 = unset)
   uint8_t touch_map;          // 0..3, touch coordinate mapping
   uint8_t tb_speed;           // trackball speed 1(slow)..5(fast); 0 = unset -> default
-  uint8_t reserved[6];
+  uint8_t configured;         // 0 = show first-boot radio-preset onboarding
+  uint8_t adv_interval_min;   // auto-advert period in minutes (0 = off)
+  uint8_t reserved[4];
 };
 
 // ---- last heard ----
@@ -129,6 +132,15 @@ public:
   void requestDraw() { _dirty = true; }
   void saveSettings();
   void applySettings();
+
+  // discovery / diagnostics / SOS
+  void discover();                     // send a flood advert + jump to Heard
+  uint32_t rxCount() const { return _rx_count; }
+  void applyPreset(float freq, float bw, uint8_t sf, uint8_t cr);  // onboarding radio preset
+  void finishOnboarding();             // mark configured + go home
+  void toggleSOS();                    // start/stop the SOS beacon
+  bool sosActive() const { return _sos_active; }
+  void sendSOSNow();
 
   // chat actions
   bool sendDM(const uint8_t* pub_prefix, const char* text);       // to contact by 6-byte prefix
@@ -214,6 +226,12 @@ private:
   int _last_noise = -120;
   float _last_rx_rssi = -130, _last_rx_snr = 0;
   uint32_t _last_rx_millis = 0;
+  uint32_t _rx_count = 0;            // total raw packets received (diagnostics)
+
+  // auto-advert + SOS beacon
+  uint32_t _last_auto_adv = 0;
+  bool _sos_active = false;
+  uint32_t _sos_last = 0;
 
   // serial terminal input
   char _ser_line[96];

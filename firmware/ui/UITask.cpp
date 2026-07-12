@@ -237,6 +237,9 @@ void UITask::begin(MyMesh* m, SensorManager* s, NodePrefs* p) {
   _screens[SCR_TERMINAL]  = new TerminalScreen(*this);
   _screens[SCR_SETTINGS]  = new SettingsScreen(*this);
   _screens[SCR_QR]        = new QRScreen(*this);
+  _screens[SCR_ONBOARD]   = new OnboardScreen(*this);
+  _screens[SCR_DIAG]      = new DiagScreen(*this);
+  _screens[SCR_SOS]       = new SOSScreen(*this);
 
   termLog(C_TERM_SYS, "MeshDeck v%s on MeshCore %s", MESHDECK_VERSION, FIRMWARE_VERSION);
   // NOTE: format the floats separately - StrHelper::ftoa returns a shared static
@@ -253,9 +256,11 @@ void UITask::begin(MyMesh* m, SensorManager* s, NodePrefs* p) {
   termLog(hw.hasTouch() ? C_TERM_SYS : C_TERM_ERR,
           "touch (GT911): %s", hw.hasTouch() ? "detected" : "NOT detected");
 
-  // show the home screen straight away, before any optional extras
+  // show the home screen straight away, before any optional extras.
+  // On a fresh flash / factory reset (configured==0) show the radio-preset
+  // onboarding first so the user picks a mesh-compatible preset.
   _booted = true;
-  _cur = SCR_HOME;
+  _cur = set.configured ? SCR_HOME : SCR_ONBOARD;
   _screens[_cur]->enter();
   drawAll();
   _dirty = true;
@@ -457,6 +462,8 @@ void UITask::onRawRx(float snr, float rssi, int len) {
   _last_rx_rssi = rssi;
   _last_rx_snr = snr;
   _last_rx_millis = millis();
+  _rx_count++;
+  if (_cur == SCR_DIAG) _dirty = true;
   termLog(C_TERM_SYS, "rx: %d bytes, rssi %d, snr %s", len, (int)rssi, StrHelper::ftoa(snr));
 }
 
@@ -720,6 +727,20 @@ void UITask::loop() {
 
   dispatchInput();
 
+  // auto-advert: periodic flood advert so nearby nodes keep discovering us
+  if (set.adv_interval_min > 0) {
+    uint32_t period = (uint32_t)set.adv_interval_min * 60000UL;
+    if (millis() - _last_auto_adv > period) {
+      _last_auto_adv = millis();
+      if (mesh) { mesh->advertFlood(); termLog(C_TERM_TX, "auto-advert (flood)"); }
+    }
+  }
+
+  // SOS beacon: repeat an SOS + latest position until cancelled
+  if (_sos_active && millis() - _sos_last > 120000UL) {
+    sendSOSNow();
+  }
+
   // USB serial -> terminal commands
   while (Serial.available()) {
     char ch = Serial.read();
@@ -739,7 +760,7 @@ void UITask::loop() {
   if (millis() - _last_tick > 1000) {
     _last_tick = millis();
     _screens[_cur]->tick1s();
-    if (_cur == SCR_HOME && hw.isDisplayOn()) _dirty = true;
+    if ((_cur == SCR_HOME || _cur == SCR_DIAG) && hw.isDisplayOn()) _dirty = true;
     checkDim();
   }
 
@@ -839,4 +860,283 @@ void UITask::drawAll() {
   }
 
   hw.push();
+}
+
+// ---------------------------------------------------------------- discovery / SOS / presets
+
+void UITask::discover() {
+  if (mesh) mesh->advertFlood();
+  toast("Advert sent - listening...", C_CYAN);
+  termLog(C_TERM_TX, "discover: flood advert sent");
+  go(SCR_LASTHEARD);
+}
+
+void UITask::applyPreset(float freq, float bw, uint8_t sf, uint8_t cr) {
+  if (!prefs || !mesh) return;
+  prefs->freq = freq;
+  prefs->bw = bw;
+  prefs->sf = sf;
+  prefs->cr = cr;
+  mesh->applyRadioPrefs();
+  mesh->savePrefs();
+  char fq[16];
+  snprintf(fq, sizeof(fq), "%.3f", freq);
+  termLog(C_TERM_SYS, "radio preset: %s MHz sf%d bw%.1f cr%d", fq, (int)sf, bw, (int)cr);
+}
+
+void UITask::finishOnboarding() {
+  set.configured = 1;
+  saveSettings();
+  goHome();
+}
+
+void UITask::toggleSOS() {
+  _sos_active = !_sos_active;
+  if (_sos_active) {
+    hw.chimeError();
+    _sos_last = 0;          // force an immediate first broadcast
+    sendSOSNow();
+    toast("SOS ACTIVE - broadcasting", C_RED);
+  } else {
+    toast("SOS cancelled", C_YELLOW);
+    termLog(C_TERM_SYS, "SOS cancelled");
+  }
+  _dirty = true;
+}
+
+void UITask::sendSOSNow() {
+  _sos_last = millis();
+  char msg[110];
+  double lat, lon;
+  if (ownPos(lat, lon)) {
+    char slat[16], slon[16];
+    snprintf(slat, sizeof(slat), "%.5f", lat);
+    snprintf(slon, sizeof(slon), "%.5f", lon);
+    snprintf(msg, sizeof(msg), "SOS! %s needs help @ %s,%s",
+             prefs ? prefs->node_name : "?", slat, slon);
+  } else {
+    snprintf(msg, sizeof(msg), "SOS! %s needs help (no GPS fix)",
+             prefs ? prefs->node_name : "?");
+  }
+  sendChannel(0, msg);   // public channel
+  termLog(C_TERM_TX, "%s", msg);
+}
+
+// ---------------------------------------------------------------- Onboarding screen
+
+struct RadioPreset { const char* name; float freq; float bw; uint8_t sf; uint8_t cr; };
+static const RadioPreset PRESETS[] = {
+  { "EU/UK (Narrow)",      869.618f, 62.5f,   8, 8 },
+  { "EU/UK (Deprecated)",  869.525f, 250.0f, 11, 5 },
+  { "Netherlands",         869.618f, 62.5f,   7, 5 },
+  { "Czech (Narrow)",      869.432f, 62.5f,   7, 5 },
+  { "Switzerland",         869.618f, 62.5f,   8, 8 },
+  { "Portugal 868",        869.618f, 62.5f,   7, 6 },
+  { "EU 433 (Narrow)",     433.650f, 62.5f,   8, 8 },
+  { "EU 433 (LongRange)",  433.650f, 250.0f, 11, 5 },
+  { "USA / Canada",        910.525f, 62.5f,   7, 5 },
+  { "Australia",           915.800f, 250.0f, 10, 5 },
+  { "Australia (Narrow)",  916.575f, 62.5f,   7, 8 },
+  { "New Zealand",         917.375f, 250.0f, 11, 5 },
+  { "New Zealand (Narrow)",917.375f, 62.5f,   7, 5 },
+  { "Vietnam (Narrow)",    920.250f, 62.5f,   8, 5 },
+};
+#define N_PRESETS ((int)(sizeof(PRESETS)/sizeof(PRESETS[0])))
+#define ONB_TOTAL (N_PRESETS + 1)          // + "Keep current"
+#define ONB_ROW_H 26
+#define ONB_TOP   (STATUS_H + 6)
+#define ONB_VIS   ((SCREEN_H - ONB_TOP - 4) / ONB_ROW_H)
+
+void OnboardScreen::choose(int i) {
+  if (i >= 0 && i < N_PRESETS) {
+    const RadioPreset& p = PRESETS[i];
+    ui.applyPreset(p.freq, p.bw, p.sf, p.cr);
+    char buf[44];
+    snprintf(buf, sizeof(buf), "%s selected", p.name);
+    ui.toast(buf, C_GREEN);
+  } else {
+    ui.toast("Keeping current radio settings", C_YELLOW);
+  }
+  ui.finishOnboarding();
+}
+
+void OnboardScreen::draw() {
+  GFXcanvas16& c = ui.cv();
+  c.fillScreen(C_BG);
+  ui.drawStatusBar("Select Radio Preset");
+  c.setTextSize(1);
+  c.setTextColor(C_FG_FAINT);
+  c.setCursor(6, STATUS_H + 4);
+  (void)0;
+
+  if (_sel < _top) _top = _sel;
+  if (_sel >= _top + ONB_VIS) _top = _sel - ONB_VIS + 1;
+
+  for (int i = _top; i < ONB_TOTAL && i < _top + ONB_VIS; i++) {
+    int y = ONB_TOP + (i - _top) * ONB_ROW_H;
+    bool sel = i == _sel;
+    if (sel) c.fillRoundRect(2, y - 1, SCREEN_W - 4, ONB_ROW_H - 2, 5, C_BG_RAISED);
+    if (i < N_PRESETS) {
+      const RadioPreset& p = PRESETS[i];
+      c.setTextColor(sel ? C_FG : C_FG_DIM);
+      c.setCursor(10, y + 2);
+      c.print(p.name);
+      char params[48];
+      char fq[16];
+      snprintf(fq, sizeof(fq), "%.3f", p.freq);
+      snprintf(params, sizeof(params), "%s MHz  SF%d  BW%.1f  CR%d", fq, (int)p.sf, p.bw, (int)p.cr);
+      c.setTextColor(C_FG_FAINT);
+      c.setCursor(10, y + 13);
+      c.print(params);
+    } else {
+      c.setTextColor(sel ? C_ACCENT : C_FG_DIM);
+      c.setCursor(10, y + 6);
+      c.print("Keep current settings");
+    }
+  }
+
+  // scrollbar
+  if (ONB_TOTAL > ONB_VIS) {
+    int bar_h = (SCREEN_H - ONB_TOP) * ONB_VIS / ONB_TOTAL;
+    int bar_y = ONB_TOP + (SCREEN_H - ONB_TOP - bar_h) * _top / (ONB_TOTAL - ONB_VIS);
+    c.fillRect(SCREEN_W - 3, bar_y, 2, bar_h, C_FG_FAINT);
+  }
+}
+
+bool OnboardScreen::key(uint8_t k) {
+  if (k == 0x0D) { choose(_sel); return true; }
+  return false;
+}
+
+bool OnboardScreen::nav(NavEvent e) {
+  switch (e) {
+    case NAV_UP:     if (_sel > 0) _sel--; return true;
+    case NAV_DOWN:   if (_sel < ONB_TOTAL - 1) _sel++; return true;
+    case NAV_SELECT: choose(_sel); return true;
+    default: return true;   // swallow BACK - a choice is required
+  }
+}
+
+bool OnboardScreen::touch(const TouchEvent& e) {
+  if (e.kind != TouchEvent::TAP) return false;
+  int idx = _top + (e.y - ONB_TOP) / ONB_ROW_H;
+  if (idx >= 0 && idx < ONB_TOTAL) {
+    if (idx == _sel) choose(idx);
+    else _sel = idx;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------- Radio diagnostics screen
+
+void DiagScreen::draw() {
+  GFXcanvas16& c = ui.cv();
+  c.fillScreen(C_BG);
+  ui.drawStatusBar("Radio Diagnostics");
+  c.setTextSize(1);
+  NodePrefs* p = ui.prefs;
+  int y = STATUS_H + 10;
+  char v[40];
+
+  // radio profile
+  c.setTextColor(C_ACCENT); c.setCursor(8, y); c.print("Radio profile"); y += 15;
+
+  char fq[16]; snprintf(fq, sizeof(fq), "%.3f", p ? p->freq : 0);
+  c.setTextColor(C_FG_DIM); c.setCursor(12, y); c.print("Frequency");
+  snprintf(v, sizeof(v), "%s MHz", fq);
+  c.setTextColor(C_FG); c.setCursor(150, y); c.print(v); y += 14;
+
+  c.setTextColor(C_FG_DIM); c.setCursor(12, y); c.print("SF / BW / CR");
+  snprintf(v, sizeof(v), "SF%d  %.1f  CR%d", p ? (int)p->sf : 0, p ? p->bw : 0, p ? (int)p->cr : 0);
+  c.setTextColor(C_FG); c.setCursor(150, y); c.print(v); y += 14;
+
+  c.setTextColor(C_FG_DIM); c.setCursor(12, y); c.print("TX power");
+  snprintf(v, sizeof(v), "%d dBm", p ? (int)p->tx_power_dbm : 0);
+  c.setTextColor(C_FG); c.setCursor(150, y); c.print(v); y += 18;
+
+  // receive activity
+  c.setTextColor(C_ACCENT); c.setCursor(8, y); c.print("Receive"); y += 15;
+
+  c.setTextColor(C_FG_DIM); c.setCursor(12, y); c.print("Last packet");
+  if (ui.rxCount() == 0) {
+    c.setTextColor(C_RED); c.setCursor(150, y); c.print("never heard");
+  } else {
+    uint32_t age = (millis() - ui.lastRxMillis()) / 1000;
+    snprintf(v, sizeof(v), "%us ago", age);
+    c.setTextColor(age < 60 ? C_GREEN : age < 300 ? C_YELLOW : C_FG_FAINT);
+    c.setCursor(150, y); c.print(v);
+  }
+  y += 14;
+
+  c.setTextColor(C_FG_DIM); c.setCursor(12, y); c.print("RSSI / SNR");
+  snprintf(v, sizeof(v), "%d dBm  %s", (int)ui.lastRxRssi(), StrHelper::ftoa(ui.lastRxSnr()));
+  c.setTextColor(C_FG); c.setCursor(150, y); c.print(v); y += 14;
+
+  c.setTextColor(C_FG_DIM); c.setCursor(12, y); c.print("Packets RX");
+  snprintf(v, sizeof(v), "%u", ui.rxCount());
+  c.setTextColor(C_FG); c.setCursor(150, y); c.print(v); y += 18;
+
+  // mesh
+  c.setTextColor(C_ACCENT); c.setCursor(8, y); c.print("Mesh"); y += 15;
+  c.setTextColor(C_FG_DIM); c.setCursor(12, y); c.print("Contacts / heard");
+  snprintf(v, sizeof(v), "%d / %d", (int)(ui.mesh ? ui.mesh->getNumContacts() : 0), (int)ui.heardCount());
+  c.setTextColor(C_FG); c.setCursor(150, y); c.print(v); y += 16;
+
+  c.setTextColor(C_FG_FAINT); c.setCursor(6, SCREEN_H - 10);
+  c.print("press A to send a flood advert");
+}
+
+bool DiagScreen::key(uint8_t k) {
+  if (k == 'a' || k == 'A') {
+    if (ui.mesh) ui.mesh->advertFlood();
+    ui.toast("Advert sent", C_CYAN);
+    return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------- SOS beacon screen
+
+void SOSScreen::draw() {
+  GFXcanvas16& c = ui.cv();
+  bool on = ui.sosActive();
+  c.fillScreen(on ? C_RED : C_BG);
+  ui.drawStatusBar("SOS Beacon");
+
+  c.setTextSize(3);
+  c.setTextColor(on ? 0xFFFF : C_RED);
+  c.setCursor(120, 60);
+  c.print("SOS");
+
+  c.setTextSize(1);
+  c.setTextColor(on ? 0xFFFF : C_FG_DIM);
+  c.setCursor(40, 108);
+  c.print(on ? "ACTIVE - broadcasting every 2 min" : "Emergency location beacon");
+
+  double lat, lon;
+  char loc[52];
+  if (ui.ownPos(lat, lon)) snprintf(loc, sizeof(loc), "pos: %.5f, %.5f", lat, lon);
+  else snprintf(loc, sizeof(loc), "no GPS fix - set manual pos in Settings");
+  c.setTextColor(on ? 0xFFFF : C_FG_FAINT);
+  c.setCursor(40, 132);
+  c.print(loc);
+
+  c.setTextColor(on ? 0xFFFF : C_ACCENT);
+  c.setCursor(90, 190);
+  c.print(on ? "Click to STOP" : "Click to START");
+}
+
+bool SOSScreen::key(uint8_t k) {
+  if (k == 0x0D) { ui.toggleSOS(); return true; }
+  return false;
+}
+
+bool SOSScreen::nav(NavEvent e) {
+  if (e == NAV_SELECT) { ui.toggleSOS(); return true; }
+  return false;   // let BACK bubble up to leave the screen
+}
+
+bool SOSScreen::touch(const TouchEvent& e) {
+  if (e.kind == TouchEvent::TAP) { ui.toggleSOS(); return true; }
+  return false;
 }

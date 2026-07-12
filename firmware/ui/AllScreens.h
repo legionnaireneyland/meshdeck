@@ -30,6 +30,7 @@ public:
   bool touch(const TouchEvent& e) override;
 private:
   void sendCompose();
+  void sendCanned(int i);
   void switchTab(int dir);
   DeckThread* cur();
 
@@ -42,6 +43,7 @@ private:
   // bubble hitboxes for tap-to-reply / QR
   struct Hit { int16_t y0, y1; int msg_idx; } _hits[24];
   int _nhits = 0;
+  int _canned = -1;          // -1 = off, else index into the quick-message list
 };
 
 // ---------------------------------------------------------------- Contacts
@@ -189,4 +191,38 @@ class QRScreen : public Screen {
 public:
   QRScreen(UITask& u) : Screen(u) {}
   void draw() override;
+};
+
+// ---------------------------------------------------------------- Onboarding (first boot)
+
+class OnboardScreen : public Screen {
+public:
+  OnboardScreen(UITask& u) : Screen(u) {}
+  void draw() override;
+  bool key(uint8_t c) override;
+  bool nav(NavEvent e) override;
+  bool touch(const TouchEvent& e) override;
+private:
+  void choose(int i);
+  int _sel = 0, _top = 0;
+};
+
+// ---------------------------------------------------------------- Radio diagnostics
+
+class DiagScreen : public Screen {
+public:
+  DiagScreen(UITask& u) : Screen(u) {}
+  void draw() override;
+  bool key(uint8_t c) override;
+};
+
+// ---------------------------------------------------------------- SOS beacon
+
+class SOSScreen : public Screen {
+public:
+  SOSScreen(UITask& u) : Screen(u) {}
+  void draw() override;
+  bool key(uint8_t c) override;
+  bool nav(NavEvent e) override;
+  bool touch(const TouchEvent& e) override;
 };
