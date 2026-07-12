@@ -287,6 +287,9 @@ bool DeckHW::readTouch(TouchEvent& ev) {
       _t_start_x = _tx = sx; _t_start_y = _ty = sy;
       _t_start_ms = millis();
       _t_moved = false;
+      // Raw + mapped coords for touch calibration (visible in the USB serial log).
+      // raw = straight off the GT911; map<n>-> = after the selected transform.
+      Serial.printf("touch raw=%d,%d  map%d-> %d,%d\n", rx, ry, _touch_map, sx, sy);
       return false;
     }
     int16_t dx = sx - _tx, dy = sy - _ty;

@@ -162,6 +162,7 @@ void UITask::earlyInit() {
   set.flip = 0;
   set.always_on = 0;
   set.man_lat = set.man_lon = 0;
+  set.touch_map = 2;          // correct T-Deck landscape mapping (swap XY + mirror)
 
   hw.begin(false);
 
@@ -218,6 +219,9 @@ void UITask::begin(MyMesh* m, SensorManager* s, NodePrefs* p) {
     if (f.read((uint8_t*)&tmp, sizeof(tmp)) == sizeof(tmp) && tmp.magic == DECKSET_MAGIC) set = tmp;
     f.close();
   }
+  // Migrate old saves off the wrong touch mapping: map 0 (landscape-direct) is
+  // never correct on the T-Deck GT911, so treat a stored 0 as "use the default".
+  if (set.touch_map == 0) set.touch_map = 2;
   applySettings();
 
   store.begin();
