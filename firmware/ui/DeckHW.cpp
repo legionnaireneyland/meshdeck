@@ -63,9 +63,31 @@ bool DeckHW::begin(bool flip_display) {
   return true;
 }
 
-// Called ONCE from main, after MeshCore's radio_init() has done the single
-// Wire.begin(). Sets a sane clock/timeout and probes the keyboard + touch.
+// Called ONCE from main, just before the sensor I2C scan. Recovers a wedged
+// bus, (re)starts Wire cleanly, sets a sane clock/timeout, and probes the
+// keyboard + touch. THE BUS-RECOVERY IS THE KEY FIX: a device left holding SDA
+// low (e.g. interrupted mid-read on the previous boot) stalls every I2C
+// transaction, which killed the keyboard AND touch AND hung boot for ~2 min.
 void DeckHW::initI2CDevices() {
+  // Release the I2C driver so we can drive the pins by hand.
+  Wire.end();
+  pinMode(TDECK_I2C_SCL, OUTPUT_OPEN_DRAIN);
+  pinMode(TDECK_I2C_SDA, INPUT_PULLUP);
+  digitalWrite(TDECK_I2C_SCL, HIGH);
+  delayMicroseconds(10);
+  // Clock SCL until the slave releases SDA (max 16 pulses).
+  for (int i = 0; i < 16 && digitalRead(TDECK_I2C_SDA) == LOW; i++) {
+    digitalWrite(TDECK_I2C_SCL, LOW);  delayMicroseconds(10);
+    digitalWrite(TDECK_I2C_SCL, HIGH); delayMicroseconds(10);
+  }
+  // Generate a STOP condition (SDA low->high while SCL high) to reset slaves.
+  pinMode(TDECK_I2C_SDA, OUTPUT_OPEN_DRAIN);
+  digitalWrite(TDECK_I2C_SDA, LOW);  delayMicroseconds(10);
+  digitalWrite(TDECK_I2C_SCL, HIGH); delayMicroseconds(10);
+  digitalWrite(TDECK_I2C_SDA, HIGH); delayMicroseconds(10);
+
+  // Clean (re)start of the I2C bus.
+  Wire.begin(TDECK_I2C_SDA, TDECK_I2C_SCL);
   Wire.setClock(100000);      // 100 kHz - reliable for these peripherals
   Wire.setTimeOut(20);        // 20 ms, not the 1000 ms default: an absent device
                               // must never stall the UI loop for a second
